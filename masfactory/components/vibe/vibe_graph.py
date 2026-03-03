@@ -107,6 +107,10 @@ class VibeGraph(Graph):
                         "system_advice": "",
                     }
                 )
+                if not isinstance(output, dict):
+                    raise TypeError(
+                        f"Vibe build workflow must return dict output, got {type(output).__name__}"
+                    )
                 raw_graph_design = output.get("graph_design", {})
                 graph_design = normalize_graph_design(raw_graph_design)
         else:

@@ -6,14 +6,10 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "anthropic>=0.58.2",
-    "beautifulsoup4>=4.12.3",
-    "colorama>=0.4.6",
     "docstring-parser>=0.17.0",
-    "flask>=3.0.0",
     "google-genai>=1.26.0",
     "numpy>=2.2.6",
     "openai>=1.97.0",
-    "pyyaml>=6.0.2",
     "tenacity>=8.0.0",
     "tiktoken>=0.7.0",
 ]
@@ -27,6 +23,22 @@ embeddings = [
     "scikit-learn>=1.4.0",
     "transformers>=4.40.0",
     "tiktoken>=0.7.0",
+]
+apps = [
+    "colorama>=0.4.6",
+    "datasets>=2.0.0",
+    "diffusers>=0.30.0",
+    "huggingface-hub>=0.24.0",
+    "human-eval>=1.0.3",
+    "markdown>=3.6",
+    "pandas>=2.2.0",
+    "pillow>=10.0.0",
+    "psutil>=5.9.0",
+    "pydub>=0.25.1",
+    "pyyaml>=6.0.2",
+    "requests>=2.31.0",
+    "spacy>=3.7.0",
+    "tqdm>=4.66.0",
 ]
 [tool.setuptools.packages.find]
 where = ["."] 

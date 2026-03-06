@@ -1,11 +1,11 @@
 <div align="center">
   <img
-    src="docs/src/public/svg/logo.svg#gh-light-mode-only"
+    src="docs/src/public/svg/logo-centered.svg#gh-light-mode-only"
     alt="MASFactory"
     width="620"
   />
   <img
-    src="docs/src/public/svg/logo-dark.svg#gh-dark-mode-only"
+    src="docs/src/public/svg/logo-dark-centered.svg#gh-dark-mode-only"
     alt="MASFactory"
     width="620"
   />

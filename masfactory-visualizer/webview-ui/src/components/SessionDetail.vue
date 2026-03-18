@@ -7,6 +7,13 @@ import RuntimeGraphView from './RuntimeGraphView.vue';
 import JsonTree from './JsonTree.vue';
 import SessionBottomPane from './session/SessionBottomPane.vue';
 import type { ExecutionState } from '../types/runtimeExec';
+import {
+  buildSessionExportData,
+  buildSessionSummary,
+  formatDurationMs,
+  formatSessionExportMarkdown,
+  makeSessionExportFileName
+} from '../utils/runtimeSessionExport.js';
 
 const props = defineProps<{
   sessionId: string;
@@ -61,6 +68,8 @@ const exceptionNodeIds = computed(() => debugState.value?.exceptionNodeIds || []
 const waitingNodeIds = computed(() => runtime.humanWaitingNodeIds(props.sessionId));
 const humanPendingCount = computed(() => runtime.humanPendingCount(props.sessionId));
 const humanChatCount = computed(() => runtime.humanChatForSession(props.sessionId).length);
+const humanRequests = computed(() => runtime.humanRequestsForSession(props.sessionId));
+const humanChats = computed(() => runtime.humanChatForSession(props.sessionId));
 
 function displayNode(id: string | null | undefined): string {
   if (!id) return '';
@@ -228,6 +237,62 @@ function toggleChatPopup(): void {
 }
 
 const hasHumanChat = computed(() => humanChatCount.value > 0 || humanPendingCount.value > 0);
+const sessionSummary = computed(() =>
+  buildSessionSummary({
+    session: activeSession.value,
+    archivedSession: archivedSession.value,
+    graph: graph.value,
+    exec: exec.value,
+    humanRequests: humanRequests.value
+  })
+);
+
+function formatSummaryTokens(): string {
+  const summary = sessionSummary.value;
+  if (summary.totalTokens === null && summary.promptTokens === null && summary.completionTokens === null) return 'n/a';
+  if (
+    summary.totalTokens !== null &&
+    summary.promptTokens !== null &&
+    summary.completionTokens !== null
+  ) {
+    return `${Math.round(summary.totalTokens)} (p=${Math.round(summary.promptTokens)}, c=${Math.round(summary.completionTokens)})`;
+  }
+  if (summary.totalTokens !== null) return String(Math.round(summary.totalTokens));
+  const parts: string[] = [];
+  if (summary.promptTokens !== null) parts.push(`p=${Math.round(summary.promptTokens)}`);
+  if (summary.completionTokens !== null) parts.push(`c=${Math.round(summary.completionTokens)}`);
+  return parts.join(', ') || 'n/a';
+}
+
+function exportSession(format: 'json' | 'markdown'): void {
+  const payload = buildSessionExportData({
+    session: activeSession.value,
+    archivedSession: archivedSession.value,
+    graph: graph.value,
+    exec: exec.value,
+    debugState: debugState.value,
+    logs: logs.value,
+    systemEvents: systemEvents.value,
+    flows: flows.value,
+    humanRequests: humanRequests.value,
+    humanChats: humanChats.value
+  });
+  const fileName = makeSessionExportFileName(
+    session.value?.graphName ?? archivedSession.value?.graphName,
+    props.sessionId,
+    format
+  );
+  const content =
+    format === 'json' ? `${JSON.stringify(payload, null, 2)}\n` : formatSessionExportMarkdown(payload);
+
+  postMessage({
+    type: 'runtimeExportSession',
+    sessionId: props.sessionId,
+    format,
+    fileName,
+    content
+  });
+}
 
 function openDebugLocation() {
   const loc = debugState.value?.location;
@@ -367,6 +432,16 @@ watch(
           Chat
           <span v-if="humanPendingCount > 0" class="chat-badge">{{ humanPendingCount }}</span>
         </button>
+        <button class="btn secondary" title="Export current session snapshot as JSON" @click="exportSession('json')">
+          Export JSON
+        </button>
+        <button
+          class="btn secondary"
+          title="Export current session summary as Markdown"
+          @click="exportSession('markdown')"
+        >
+          Export MD
+        </button>
         <button
           v-if="showOpenInTab !== false"
           class="btn secondary"
@@ -455,6 +530,52 @@ watch(
       <div class="kv">
         <div class="k">Running</div>
         <div class="v mono">{{ runningLabel }}</div>
+      </div>
+    </div>
+
+    <div class="summary">
+      <div class="summary-head">
+        <div class="summary-title">Session Summary</div>
+        <div class="summary-sub mono">Computed from current runtime snapshot</div>
+      </div>
+      <div class="summary-grid">
+        <div class="summary-card">
+          <div class="k">Tokens</div>
+          <div class="v mono">{{ formatSummaryTokens() }}</div>
+        </div>
+        <div class="summary-card">
+          <div class="k">Total Duration</div>
+          <div class="v mono">{{ formatDurationMs(sessionSummary.totalDurationMs) }}</div>
+        </div>
+        <div class="summary-card">
+          <div class="k">Elapsed</div>
+          <div class="v mono">{{ formatDurationMs(sessionSummary.elapsedMs) }}</div>
+        </div>
+        <div class="summary-card">
+          <div class="k">OK Nodes</div>
+          <div class="v mono">{{ sessionSummary.okNodeCount }}</div>
+        </div>
+        <div class="summary-card">
+          <div class="k">Error Nodes</div>
+          <div class="v mono">{{ sessionSummary.errorNodeCount }}</div>
+        </div>
+        <div class="summary-card">
+          <div class="k">Human Requests</div>
+          <div class="v mono">
+            {{ sessionSummary.totalHumanRequests }}
+            <span v-if="sessionSummary.pendingHumanRequests > 0" class="summary-note">
+              ({{ sessionSummary.pendingHumanRequests }} pending)
+            </span>
+          </div>
+        </div>
+        <div class="summary-card">
+          <div class="k">Completed Runs</div>
+          <div class="v mono">{{ sessionSummary.completedRunCount }}</div>
+        </div>
+        <div class="summary-card">
+          <div class="k">Running Runs</div>
+          <div class="v mono">{{ sessionSummary.runningRunCount }}</div>
+        </div>
       </div>
     </div>
 
@@ -674,6 +795,56 @@ watch(
   border: 1px solid var(--vscode-panel-border, #2d2d2d);
   border-radius: 8px;
   padding: 10px;
+}
+
+.summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--vscode-panel-border, #2d2d2d);
+  border-radius: 8px;
+  padding: 10px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent);
+}
+
+.summary-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.summary-title {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.summary-sub {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.summary-card {
+  border: 1px solid var(--vscode-panel-border, #2d2d2d);
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.summary-note {
+  opacity: 0.75;
+  font-size: 11px;
 }
 
 .exit-banner {

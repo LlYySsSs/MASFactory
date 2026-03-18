@@ -549,6 +549,8 @@ export class WebviewProvider implements vscode.WebviewViewProvider {
                 },
                 runtimeHumanResponse: (sessionId, requestId, content) =>
                     this.runtimeHub?.sendHumanResponse(sessionId, requestId, content),
+                runtimeExportSession: (sessionId, format, content, fileName) =>
+                    this.handleRuntimeExportSession(sessionId, format, content, fileName),
                 openFileLocation: (filePath, line, column) => openFileLocation(filePath, line, column),
                 vibeSave: (wv, documentUri, text) => this.vibeDocs.save(wv, { documentUri, text }),
                 vibeReload: async (documentUri) => {
@@ -668,6 +670,46 @@ export class WebviewProvider implements vscode.WebviewViewProvider {
                 );
             });
         });
+    }
+
+    private async handleRuntimeExportSession(
+        sessionId: string,
+        format: 'json' | 'markdown',
+        content: string,
+        fileName?: string
+    ): Promise<void> {
+        const sid = typeof sessionId === 'string' ? sessionId.trim() : '';
+        const text = typeof content === 'string' ? content : '';
+        if (!sid || !text) return;
+
+        const normalizedFormat = format === 'markdown' ? 'markdown' : 'json';
+        const suggestedNameRaw =
+            typeof fileName === 'string' && fileName.trim()
+                ? fileName.trim()
+                : `session-${sid}.${normalizedFormat === 'markdown' ? 'md' : 'json'}`;
+        const suggestedName = suggestedNameRaw.replace(/[\\/:*?"<>|]+/g, '_');
+
+        const target = await vscode.window.showSaveDialog({
+            saveLabel: normalizedFormat === 'markdown' ? 'Export Markdown' : 'Export JSON',
+            defaultUri: vscode.Uri.file(path.join(vscode.workspace.rootPath || this.context.extensionPath, suggestedName)),
+            filters:
+                normalizedFormat === 'markdown'
+                    ? { Markdown: ['md'] }
+                    : { JSON: ['json'] }
+        });
+        if (!target) return;
+
+        try {
+            const encoder = new TextEncoder();
+            await vscode.workspace.fs.writeFile(target, encoder.encode(text));
+            void vscode.window.showInformationMessage(
+                `MASFactory Visualizer: exported session ${sid} to ${path.basename(target.fsPath)}`
+            );
+        } catch (err) {
+            void vscode.window.showErrorMessage(
+                `MASFactory Visualizer: failed to export session ${sid}: ${String(err)}`
+            );
+        }
     }
 
     private safePostMessage(target: vscode.Webview, message: unknown): void {

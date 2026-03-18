@@ -83,6 +83,13 @@ export type RuntimeHumanResponseMessage = {
   requestId: string;
   content: string;
 };
+export type RuntimeExportSessionMessage = {
+  type: 'runtimeExportSession';
+  sessionId: string;
+  format: 'json' | 'markdown';
+  content: string;
+  fileName?: string;
+};
 export type OpenFileLocationMessage = { type: 'openFileLocation'; filePath: string; line?: number; column?: number };
 export type VibeSaveMessage = { type: 'vibeSave'; documentUri: string; text: string };
 export type VibeReloadMessage = { type: 'vibeReload'; documentUri: string };
@@ -101,6 +108,7 @@ export type WebviewOutboundMessage =
   | RuntimeUnsubscribeMessage
   | RuntimeOpenSessionMessage
   | RuntimeHumanResponseMessage
+  | RuntimeExportSessionMessage
   | OpenFileLocationMessage
   | VibeSaveMessage
   | VibeReloadMessage;
@@ -226,6 +234,22 @@ export function parseWebviewOutboundMessage(raw: unknown): WebviewOutboundMessag
     const content = typeof raw.content === 'string' ? raw.content : '';
     if (!sessionId || !requestId) return null;
     return { type, sessionId, requestId, content };
+  }
+
+  if (type === 'runtimeExportSession') {
+    const sessionId = asString(raw.sessionId);
+    const formatRaw = asString(raw.format);
+    const content = typeof raw.content === 'string' ? raw.content : null;
+    if (!sessionId || !formatRaw || content === null) return null;
+    const format = formatRaw === 'markdown' ? 'markdown' : formatRaw === 'json' ? 'json' : null;
+    if (!format) return null;
+    return {
+      type,
+      sessionId,
+      format,
+      content,
+      fileName: asOptionalString(raw.fileName)
+    };
   }
 
   if (type === 'openFileLocation') {

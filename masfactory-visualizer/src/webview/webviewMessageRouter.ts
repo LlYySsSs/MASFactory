@@ -31,6 +31,12 @@ export type WebviewMessageHandlers = {
   runtimeUnsubscribe: (sessionId: string) => void;
   runtimeOpenSession: (sessionId: string) => void;
   runtimeHumanResponse: (sessionId: string, requestId: string, content: string) => void;
+  runtimeExportSession: (
+    sessionId: string,
+    format: 'json' | 'markdown',
+    content: string,
+    fileName?: string
+  ) => Promise<void>;
   openFileLocation: (filePath?: unknown, line?: unknown, column?: unknown) => void;
   vibeSave: (webview: vscode.Webview, documentUri?: unknown, text?: unknown) => Promise<void>;
   vibeReload: (documentUri?: unknown) => Promise<void>;
@@ -99,6 +105,9 @@ export function registerWebviewMessageHandling(args: {
           return;
         case 'runtimeHumanResponse':
           handlers.runtimeHumanResponse(message.sessionId, message.requestId, message.content);
+          return;
+        case 'runtimeExportSession':
+          void handlers.runtimeExportSession(message.sessionId, message.format, message.content, message.fileName);
           return;
         case 'openFileLocation':
           handlers.openFileLocation(message.filePath, message.line, message.column);

@@ -1,0 +1,364 @@
+:root {
+  color-scheme: light;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --bg: #f3efe6;
+  --panel: rgba(255, 250, 242, 0.94);
+  --ink: #122033;
+  --muted: #5f6b7b;
+  --line: #d4c9b4;
+  --accent: #d0632f;
+  --accent-strong: #a7461e;
+  --agent: #204e6a;
+  --custom: #8d5f16;
+  --loop: #5d3f91;
+  --start: #2d7b54;
+  --end: #7b2d47;
+  --shadow: 0 18px 40px rgba(20, 31, 45, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at top left, rgba(208, 99, 47, 0.14), transparent 28%),
+    radial-gradient(circle at right center, rgba(32, 78, 106, 0.16), transparent 24%),
+    linear-gradient(180deg, #f8f3ea 0%, #efe6d8 100%);
+  color: var(--ink);
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  border-radius: 14px;
+  background: var(--accent);
+  color: #fffaf5;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: transform 120ms ease, background 120ms ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+  background: var(--accent-strong);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+button.ghost {
+  background: #ead9c1;
+  color: var(--ink);
+}
+
+button.danger-button {
+  background: #8b2846;
+}
+
+input,
+textarea {
+  width: 100%;
+  border: 1px solid rgba(18, 32, 51, 0.14);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.75);
+  color: var(--ink);
+}
+
+textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+label {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) 360px;
+  gap: 16px;
+  padding: 16px;
+}
+
+.left-panel,
+.right-panel,
+.workspace-header,
+.console-card,
+.inspector-panel,
+.tool-group {
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+}
+
+.left-panel,
+.right-panel {
+  border-radius: 24px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.brand h1,
+.workspace-header h2 {
+  margin: 6px 0 8px;
+  font-family: "Avenir Next", "Trebuchet MS", sans-serif;
+  letter-spacing: -0.04em;
+}
+
+.brand p,
+.workspace-header p,
+.empty-state {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent-strong);
+}
+
+.tool-group,
+.panel-section {
+  border-radius: 18px;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.group-title,
+.section-title,
+.console-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent-strong);
+}
+
+.edge-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.edge-title {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.workspace {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.workspace-header {
+  border-radius: 24px;
+  padding: 18px 22px;
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 16px;
+}
+
+.status-card {
+  min-width: 220px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(32, 78, 106, 0.14), rgba(208, 99, 47, 0.14));
+}
+
+.status-label {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.status-value {
+  margin-top: 4px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.canvas-board {
+  position: relative;
+  min-height: 520px;
+  border-radius: 28px;
+  overflow: hidden;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.28) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.28) 1px, transparent 1px),
+    linear-gradient(135deg, rgba(32, 78, 106, 0.14), rgba(255, 248, 240, 0.85));
+  background-size: 28px 28px, 28px 28px, auto;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  box-shadow: var(--shadow);
+}
+
+.canvas-lines {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.edge-line {
+  stroke: rgba(41, 66, 95, 0.78);
+  stroke-width: 2.5;
+}
+
+.edge-line.preview {
+  stroke-dasharray: 7 6;
+}
+
+.canvas-node {
+  position: absolute;
+  width: 180px;
+  min-height: 60px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  color: #fff;
+  box-shadow: 0 18px 28px rgba(18, 32, 51, 0.18);
+  cursor: move;
+  user-select: none;
+}
+
+.canvas-node.selected {
+  outline: 3px solid rgba(255, 255, 255, 0.92);
+}
+
+.canvas-node.type-agent {
+  background: linear-gradient(135deg, #204e6a, #2d6f90);
+}
+
+.canvas-node.type-custom {
+  background: linear-gradient(135deg, #8d5f16, #c28c2f);
+}
+
+.canvas-node.type-loop {
+  background: linear-gradient(135deg, #5d3f91, #7f5fc1);
+}
+
+.canvas-node.type-start {
+  background: linear-gradient(135deg, #2d7b54, #5baa63);
+}
+
+.canvas-node.type-end {
+  background: linear-gradient(135deg, #7b2d47, #a84259);
+}
+
+.node-type {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  opacity: 0.8;
+}
+
+.node-label {
+  margin-top: 8px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.node-id {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.84;
+}
+
+.node-handle {
+  position: absolute;
+  top: 25px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.24);
+  padding: 0;
+}
+
+.node-handle:hover {
+  background: rgba(255, 255, 255, 0.38);
+}
+
+.input-handle {
+  left: -10px;
+}
+
+.output-handle {
+  right: -10px;
+}
+
+.helper-text {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.console-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.console-card {
+  border-radius: 22px;
+  padding: 16px;
+}
+
+.console-card pre {
+  margin: 8px 0 0;
+  padding: 12px;
+  min-height: 160px;
+  overflow: auto;
+  border-radius: 16px;
+  background: rgba(18, 32, 51, 0.92);
+  color: #f7f1e5;
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.inspector-panel {
+  border-radius: 22px;
+  overflow: auto;
+  max-height: calc(100vh - 32px);
+}
+
+@media (max-width: 1280px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .console-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .inspector-panel {
+    max-height: none;
+  }
+}

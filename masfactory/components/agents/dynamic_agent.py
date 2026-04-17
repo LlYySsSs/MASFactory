@@ -5,6 +5,7 @@ from masfactory.adapters.memory import Memory
 from masfactory.adapters.retrieval import Retrieval
 from masfactory.core.message import MessageFormatter
 from masfactory.core.node import Node
+from masfactory.skills import Skill
 from masfactory.utils.hook import masf_hook
 
 _UNSET = object()
@@ -27,6 +28,7 @@ class DynamicAgent(Agent):
         model_settings:dict[str,str]=None,
         memories:list[Memory]=None,
         retrievers:list[Retrieval]=None,
+        skills:list[Skill]=None,
         attributes:dict[str, object] | None = None
         ):
         """Create a DynamicAgent.
@@ -48,6 +50,7 @@ class DynamicAgent(Agent):
             model_settings: Provider/model settings passed into the adapter invoke call.
             memories: Optional memories attached to the agent.
             retrievers: Optional retrieval backends attached to the agent.
+            skills: Optional loaded skill packages attached to the agent.
             attributes: Optional default attributes local to this agent.
         """
         if pull_keys is _UNSET:
@@ -65,6 +68,7 @@ class DynamicAgent(Agent):
             tools=tools,
             memories=memories,
             retrievers=retrievers,
+            skills=skills,
             pull_keys=pull_keys,
             push_keys=push_keys,
             model_settings=model_settings,
@@ -80,7 +84,13 @@ class DynamicAgent(Agent):
     @masf_hook(Node.Hook.FORWARD)
     def _forward(self, input_dict:dict[str,object]) -> dict[str,object]:
         """Update instructions from `instruction_key`, then run parent forward."""
-        self._instructions = input_dict[self._instruction_key]
-        input_dict.pop(self._instruction_key)
-        return super()._forward(input_dict)
+        forwarded_input = input_dict.copy()
+        runtime_instructions = forwarded_input.pop(self._instruction_key, None)
+        if runtime_instructions is not None and not isinstance(runtime_instructions, str):
+            runtime_instructions = str(runtime_instructions)
+        self._runtime_instruction_override = runtime_instructions
+        try:
+            return super()._forward(forwarded_input)
+        finally:
+            self._runtime_instruction_override = None
         

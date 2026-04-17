@@ -64,9 +64,7 @@ When you inject runtime resources (HTTP clients, connection pools, locks, databa
 ### Example: share the model, isolate the memory
 
 ```python
-from masfactory import Agent, NodeTemplate, OpenAIModel
-from masfactory.core.node_template import Shared, Factory
-from masfactory.adapters.memory import HistoryMemory
+from masfactory import Agent, NodeTemplate, OpenAIModel, HistoryMemory, Shared, Factory
 
 model = OpenAIModel(model_name="gpt-4o-mini", api_key="...", base_url="...")
 
@@ -158,8 +156,7 @@ The example below shows three scenarios:
 3. Override `phase_instructions` for a specific phase by phase node name.
 
 ```python
-from masfactory import RootGraph, Loop, Agent, NodeTemplate
-from masfactory.core.node_template import template_defaults_for, template_overrides_for
+from masfactory import RootGraph, Loop, Agent, NodeTemplate, template_defaults_for, template_overrides_for
 
 Phase = NodeTemplate(
     Loop,

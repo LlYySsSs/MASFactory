@@ -179,6 +179,6 @@ PlannerAgent = NodeTemplate(
    memories=[HistoryMemory()]   
 )
 
-__ALL__=[
+__all__=[
    "PlannerAgent"
 ]

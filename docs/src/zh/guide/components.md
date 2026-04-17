@@ -132,7 +132,7 @@ MASFactory 提供两类顶层组件：`SingleAgent` 与 `RootGraph`。
 动态智能体节点。<br>
 `DynamicAgent` 节点与 `Agent` 相似，唯一不同之处在于，`DynamicAgent` 节点的 `instructions` 不是在编码时确定的，而是在运行时从 `in_edges` 的消息中提取的。<br>
 `DynamicAgent` 在运行时会从输入消息中读取 `instruction_key`（默认为 `"instructions"`）对应的字段，并用该字段动态覆盖本轮执行的 `instructions`（随后会从输入里移除该字段再执行）。
-因此在使用 `DynamicAgent` 时，务必保证上游节点/入边会提供该字段（否则会触发 KeyError）。
+如果该字段缺失，`DynamicAgent` 会回退到 `default_instructions`。
 - 构造参数： `name`、`model`、`default_instructions`、`instruction_key`?、`prompt_template`?、`tools`?、`memories`?、`retrievers`?、`pull_keys`?、`push_keys`?、`model_settings`?、`role_name`? <br>
   - `default_instructions`：默认指令（初始化时使用）。实际运行时通常由上游通过 `instruction_key` 字段每次动态提供；<br>
   - `instruction_key`：入边消息中用于“动态覆盖指令”的键名，默认值为 `"instructions"`。如果在入边消息中检测到该键，则本轮执行将以其值作为指令并覆盖 `default_instructions`；<br>

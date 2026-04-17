@@ -10,7 +10,7 @@ This document provides a complete API reference for the MASFactory framework, in
 :::
 
 ::: info Version Information
-This document corresponds to MASFactory v1.0.0
+This document corresponds to MASFactory v1.0.1
 :::
 
 ## Core Modules
@@ -312,6 +312,7 @@ class Agent(Node):
 | `tools` | `list[Callable] \| None` | `None` | List of tool functions |
 | `memories` | `list[Memory] \| None` | `None` | List of memory adapters |
 | `retrievers` | `list[Retrieval] \| None` | `None` | Retrieval adapters (RAG/MCP, etc.) |
+| `skills` | `list[Skill] \| None` | `None` | Explicitly loaded skill packages attached at the directive layer |
 | `pull_keys` | `dict[str,dict|str] \| None` | `{}` | Visible/required node variable keys and descriptions |
 | `push_keys` | `dict[str,dict|str] \| None` | `{}` | Node variable keys and descriptions written back after execution |
 | `model_settings` | `dict \| None` | `None` | Additional parameters passed to the model |
@@ -327,6 +328,7 @@ class Agent(Node):
 | `max_tokens` | `int` | - | Maximum number of output tokens |
 | `top_p` | `float` | [0.0, 1.0] | Nucleus sampling parameter |
 | `stop` | `list[str]` | - | List of tokens to stop generation |
+| `tool_choice` | `str \| dict` | provider-specific | Tool routing mode or provider-native tool choice payload |
 
 #### Usage Example
 
@@ -344,6 +346,11 @@ agent = Agent(
 
 ::: tip Tool Call Handling
 When tools are provided, the model may produce tool call responses. Agent will automatically call and backfill results, then ask the model again until final content is returned.
+:::
+
+::: info Invocation assembly
+`Agent.observe(...)` delegates prompt/message/tool assembly to `RequestAssembler`.
+The runtime keeps directives (instructions + skills), conversation history, passive resource context, and actions/tools as separate semantic layers.
 :::
 
 ---
@@ -841,13 +848,161 @@ class DynamicAgent(Agent):
 #### Features
 
 - **Dynamic Instructions**: At runtime, reads the field named by `instruction_key` from the input message and uses it to override the instructions for the current execution
+- **Fallback Semantics**: If the field is missing, the agent keeps using `default_instructions`
 - **Flexible Configuration**: Supports custom instruction key names
 - **Complete Functionality**: Inherits all functionality from Agent
 
-::: warning Note
-The current implementation requires the input message to contain the field referenced by `instruction_key`.
-If that field is missing, execution raises `KeyError`.
-:::
+---
+
+## Skills {#skills}
+
+MASFactory Skills are explicit, directory-based packages centered on an Anthropic-style `SKILL.md` file.
+They are loaded in user code and attached to `Agent(..., skills=[...])`.
+
+### Skill Class
+
+```python
+@dataclass(frozen=True)
+class Skill:
+    name: str
+    description: str | None
+    body: str
+    skill_dir: Path
+    skill_md_path: Path
+    frontmatter: dict[str, Any] = field(default_factory=dict)
+    examples: list[Path] = field(default_factory=list)
+    templates: list[Path] = field(default_factory=list)
+    references: list[Path] = field(default_factory=list)
+    scripts: list[Path] = field(default_factory=list)
+    raw_markdown: str = ""
+```
+
+Parsed Anthropic-style skill package used by MASFactory agents.
+
+#### Important Fields
+
+| Field | Type | Description |
+|------|------|------|
+| `name` | `str` | Skill name. Falls back to the directory name if omitted from frontmatter. |
+| `description` | `str \| None` | Optional skill description from frontmatter. |
+| `body` | `str` | Main markdown instructions extracted from `SKILL.md`. |
+| `skill_dir` | `Path` | Root directory of the skill package. |
+| `skill_md_path` | `Path` | Absolute path to the parsed `SKILL.md` file. |
+| `frontmatter` | `dict[str, Any]` | Parsed YAML frontmatter mapping. |
+| `examples` | `list[Path]` | Supporting files discovered under `examples/`. |
+| `templates` | `list[Path]` | Markdown template files discovered in the skill root. |
+| `references` | `list[Path]` | Other supporting files discovered in the package. |
+| `scripts` | `list[Path]` | Files discovered under `scripts/`. |
+| `raw_markdown` | `str` | Original unmodified contents of `SKILL.md`. |
+
+#### Important Properties
+
+| Property | Type | Description |
+|------|------|------|
+| `source_path` | `str` | Normalized source directory path of the skill package. |
+
+#### Important Methods
+
+| Method | Returns | Description |
+|------|------|------|
+| `metadata()` | `dict[str, object]` | Stable metadata used by Agent / visualizer integrations. |
+| `render_supporting_files(label, paths)` | `str \| None` | Render a bounded number of supporting files for prompt inclusion. |
+| `render_section()` | `str` | Render one full skill directive section. |
+
+### SkillSet Class
+
+```python
+@dataclass(frozen=True)
+class SkillSet:
+    skills: list[Skill] = field(default_factory=list)
+```
+
+Skill-side composition view consumed by Agents.
+It owns skill rendering/metadata composition so `Agent` does not need to read skill files directly.
+
+#### Core Methods
+
+- `render_instructions() -> str`: Render the `[Loaded Skills]` block
+- `compose(base_instructions: str) -> str`: Append rendered skills to base instructions
+- `metadata() -> list[dict[str, object]]`: Return stable metadata for loaded skills
+
+### load_skill()
+
+```python
+def load_skill(path: str | Path) -> Skill
+```
+
+Load one Anthropic-style skill package from a directory.
+
+**Parameters:**
+- `path`: Path to a skill directory containing a required `SKILL.md` file
+
+**Returns:**
+- `Skill`: Parsed skill object with normalized paths and discovered supporting files
+
+**Exceptions:**
+- `SkillNotFoundError`: If the directory does not exist or `SKILL.md` is missing
+- `InvalidSkillPackageError`: If the path exists but is not a valid skill package directory
+- `SkillParseError`: If `SKILL.md` cannot be read or parsed into a valid skill definition
+
+**Example:**
+
+```python
+from masfactory import load_skill
+
+paper_summary = load_skill("./skills/paper-summary")
+```
+
+### load_skills()
+
+```python
+def load_skills(paths: Iterable[str | Path]) -> list[Skill]
+```
+
+Load multiple skill packages in the order they are provided.
+
+**Parameters:**
+- `paths`: Iterable of skill directory paths
+
+**Returns:**
+- `list[Skill]`: Parsed skills preserving input order
+
+**Exceptions:**
+- `SkillNotFoundError`: If any provided directory does not exist or lacks `SKILL.md`
+- `InvalidSkillPackageError`: If any provided path is not a valid skill package directory
+- `SkillParseError`: If any `SKILL.md` file cannot be parsed
+
+**Notes:**
+- `load_skills()` is fail-fast and stops at the first invalid skill package
+
+**Example:**
+
+```python
+from masfactory import load_skills
+
+paper_summary, review_writing = load_skills([
+    "./skills/paper-summary",
+    "./skills/review-writing",
+])
+```
+
+### Skill Errors
+
+#### SkillError
+
+Base class for public errors raised by MASFactory Skills APIs.
+
+#### SkillNotFoundError
+
+Raised when the target skill directory does not exist or when the required `SKILL.md` file is missing.
+
+#### InvalidSkillPackageError
+
+Raised when the target path exists but does not conform to the expected skill package layout.
+
+#### SkillParseError
+
+Raised when `SKILL.md` exists but cannot be parsed into a valid skill definition.
 
 ---
 

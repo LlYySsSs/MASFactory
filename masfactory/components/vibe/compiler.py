@@ -191,7 +191,7 @@ def _normalize_scope(graph_obj: Any, *, in_loop_subgraph: bool, path: str) -> di
     if not isinstance(nodes_raw, list) or not isinstance(edges_raw, list):
         raise ValueError(f"{path}: must contain list 'nodes' and list 'edges'")
 
-    node_specs: dict[str, dict[str, Any]] = {}
+    node_configs: dict[str, dict[str, Any]] = {}
     builtins = (
         {_BUILTIN_CONTROLLER, _BUILTIN_TERMINATE}
         if in_loop_subgraph
@@ -211,7 +211,7 @@ def _normalize_scope(graph_obj: Any, *, in_loop_subgraph: bool, path: str) -> di
             raise ValueError(f"{path}.nodes[{i}].name: invalid id '{name}'")
         if name.upper() in {b.upper() for b in builtins}:
             raise ValueError(f"{path}.nodes[{i}].name: '{name}' is reserved")
-        if name in node_specs:
+        if name in node_configs:
             raise ValueError(f"{path}.nodes[{i}].name: duplicate node '{name}'")
 
         node_type = raw.get("type")
@@ -285,7 +285,7 @@ def _normalize_scope(graph_obj: Any, *, in_loop_subgraph: bool, path: str) -> di
             if field in node and node[field] is not None:
                 node[field] = _normalize_keys_dict(node[field], path=f"{path}.nodes[{i}].{field}")
 
-        node_specs[name] = node
+        node_configs[name] = node
         nodes.append(node)
 
     edges: list[dict[str, Any]] = []
@@ -304,13 +304,13 @@ def _normalize_scope(graph_obj: Any, *, in_loop_subgraph: bool, path: str) -> di
         dst = str(dst).strip()
 
         if in_loop_subgraph:
-            src_ok = src == _BUILTIN_CONTROLLER or src in node_specs
-            dst_ok = dst in {_BUILTIN_CONTROLLER, _BUILTIN_TERMINATE} or dst in node_specs
+            src_ok = src == _BUILTIN_CONTROLLER or src in node_configs
+            dst_ok = dst in {_BUILTIN_CONTROLLER, _BUILTIN_TERMINATE} or dst in node_configs
             if src == _BUILTIN_TERMINATE:
                 raise ValueError(f"{path}.edges[{i}]: TERMINATE cannot be an edge source")
         else:
-            src_ok = src == _BUILTIN_ENTRY or src in node_specs
-            dst_ok = dst == _BUILTIN_EXIT or dst in node_specs
+            src_ok = src == _BUILTIN_ENTRY or src in node_configs
+            dst_ok = dst == _BUILTIN_EXIT or dst in node_configs
 
         if not src_ok:
             raise ValueError(f"{path}.edges[{i}]: unknown source '{src}'")
@@ -335,8 +335,8 @@ def _normalize_scope(graph_obj: Any, *, in_loop_subgraph: bool, path: str) -> di
         if in_loop_subgraph and src == _BUILTIN_CONTROLLER and "condition" in edge:
             raise ValueError(f"{path}.edges[{i}]: CONTROLLER outgoing edges must not include 'condition'")
 
-        src_spec = node_specs.get(src)
-        if isinstance(src_spec, dict) and str(src_spec.get("type", "")).strip() == _SWITCH:
+        source_node_config = node_configs.get(src)
+        if isinstance(source_node_config, dict) and str(source_node_config.get("type", "")).strip() == _SWITCH:
             cond = edge.get("condition")
             if not _is_non_empty_str(cond):
                 raise ValueError(f"{path}.edges[{i}]: switch edge '{src}->{dst}' requires condition")
@@ -346,17 +346,17 @@ def _normalize_scope(graph_obj: Any, *, in_loop_subgraph: bool, path: str) -> di
     # Structural requirements + reachability checks
     if in_loop_subgraph:
         if not any(
-            e.get("source") == _BUILTIN_CONTROLLER and str(e.get("target")) in node_specs for e in edges
+            e.get("source") == _BUILTIN_CONTROLLER and str(e.get("target")) in node_configs for e in edges
         ):
             raise ValueError(f"{path}: Loop.sub_graph must contain at least one CONTROLLER -> <node> edge")
         if not any(
-            e.get("target") == _BUILTIN_CONTROLLER and str(e.get("source")) in node_specs for e in edges
+            e.get("target") == _BUILTIN_CONTROLLER and str(e.get("source")) in node_configs for e in edges
         ):
             raise ValueError(f"{path}: Loop.sub_graph must contain at least one <node> -> CONTROLLER edge")
 
         # Reachability: every node reachable from CONTROLLER
         adj: dict[str, set[str]] = {_BUILTIN_CONTROLLER: set(), _BUILTIN_TERMINATE: set()}
-        for n in node_specs.keys():
+        for n in node_configs.keys():
             adj.setdefault(n, set())
         for e in edges:
             adj.setdefault(str(e["source"]), set()).add(str(e["target"]))
@@ -373,7 +373,7 @@ def _normalize_scope(graph_obj: Any, *, in_loop_subgraph: bool, path: str) -> di
             return seen
 
         reachable = bfs(_BUILTIN_CONTROLLER)
-        for n in node_specs.keys():
+        for n in node_configs.keys():
             if n not in reachable:
                 raise ValueError(f"{path}: node '{n}' is not reachable from CONTROLLER")
 
@@ -393,17 +393,17 @@ def _normalize_scope(graph_obj: Any, *, in_loop_subgraph: bool, path: str) -> di
                 continue
             can_reach.add(cur)
             stack.extend(list(reverse.get(cur, set())))
-        for n in node_specs.keys():
+        for n in node_configs.keys():
             if n not in can_reach:
                 raise ValueError(f"{path}: node '{n}' cannot reach CONTROLLER/TERMINATE")
     else:
-        if not any(e.get("source") == _BUILTIN_ENTRY and str(e.get("target")) in node_specs for e in edges):
+        if not any(e.get("source") == _BUILTIN_ENTRY and str(e.get("target")) in node_configs for e in edges):
             raise ValueError(f"{path}: graph must contain at least one ENTRY -> <node> edge")
-        if not any(e.get("target") == _BUILTIN_EXIT and str(e.get("source")) in node_specs for e in edges):
+        if not any(e.get("target") == _BUILTIN_EXIT and str(e.get("source")) in node_configs for e in edges):
             raise ValueError(f"{path}: graph must contain at least one <node> -> EXIT edge")
 
         adj: dict[str, set[str]] = {_BUILTIN_ENTRY: set(), _BUILTIN_EXIT: set()}
-        for n in node_specs.keys():
+        for n in node_configs.keys():
             adj.setdefault(n, set())
         for e in edges:
             adj.setdefault(str(e["source"]), set()).add(str(e["target"]))
@@ -420,7 +420,7 @@ def _normalize_scope(graph_obj: Any, *, in_loop_subgraph: bool, path: str) -> di
             return seen
 
         reachable = bfs(_BUILTIN_ENTRY)
-        for n in node_specs.keys():
+        for n in node_configs.keys():
             if n not in reachable:
                 raise ValueError(f"{path}: node '{n}' is not reachable from ENTRY")
 
@@ -437,7 +437,7 @@ def _normalize_scope(graph_obj: Any, *, in_loop_subgraph: bool, path: str) -> di
                 continue
             can_reach_exit.add(cur)
             stack.extend(list(reverse.get(cur, set())))
-        for n in node_specs.keys():
+        for n in node_configs.keys():
             if n not in can_reach_exit:
                 raise ValueError(f"{path}: node '{n}' cannot reach EXIT")
 
@@ -488,35 +488,35 @@ def normalize_graph_design(graph_design: Any) -> dict[str, Any]:
     return validate_graph_design_strict(graph_design)
 
 
-def _build_action_kwargs(spec: dict[str, Any], model: Model, tools_by_name: dict[str, Callable]) -> dict[str, Any]:
+def _build_action_kwargs(node_config: dict[str, Any], model: Model, tools_by_name: dict[str, Callable]) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "model": model,
-        "instructions": str(spec["instructions"]).strip(),
+        "instructions": str(node_config["instructions"]).strip(),
         "formatters": [ParagraphMessageFormatter(), TwinsFieldTextFormatter()],
     }
 
-    if _is_non_empty_str(spec.get("prompt_template")):
-        kwargs["prompt_template"] = str(spec["prompt_template"]).strip()
+    if _is_non_empty_str(node_config.get("prompt_template")):
+        kwargs["prompt_template"] = str(node_config["prompt_template"]).strip()
 
-    tools = _str_list(spec.get("tools")) if "tools" in spec else []
+    tools = _str_list(node_config.get("tools")) if "tools" in node_config else []
     if tools:
         unknown = [name for name in tools if name not in tools_by_name]
         if unknown:
-            raise ValueError(f"Unknown tools in node '{spec.get('name', '')}': {unknown}")
+            raise ValueError(f"Unknown tools in node '{node_config.get('name', '')}': {unknown}")
         kwargs["tools"] = [tools_by_name[name] for name in tools]
 
     for key in ("max_retries", "retry_delay", "retry_backoff"):
-        value = spec.get(key)
+        value = node_config.get(key)
         if value is not None:
             if not isinstance(value, int):
-                raise ValueError(f"Node '{spec.get('name', '')}' field '{key}' must be int")
+                raise ValueError(f"Node '{node_config.get('name', '')}' field '{key}' must be int")
             kwargs[key] = value
 
     for key in ("model_settings", "pull_keys", "push_keys"):
-        value = spec.get(key)
+        value = node_config.get(key)
         if value is not None:
             if not isinstance(value, dict):
-                raise ValueError(f"Node '{spec.get('name', '')}' field '{key}' must be dict")
+                raise ValueError(f"Node '{node_config.get('name', '')}' field '{key}' must be dict")
             kwargs[key] = value
 
     return kwargs
@@ -532,36 +532,38 @@ def _bind_switch_conditions(bindings: dict[str, list[tuple[Any, str]]], created:
 
 
 def _compile_graph(graph: Graph, graph_obj: dict[str, Any], model: Model, tools: list[Callable] | None) -> None:
-    node_specs = {str(n["name"]).strip(): n for n in graph_obj["nodes"] if isinstance(n, dict)}
+    node_configs = {str(n["name"]).strip(): n for n in graph_obj["nodes"] if isinstance(n, dict)}
     tools_by_name = _tool_map(tools)
     created: dict[str, Any] = {}
 
-    for name, spec in node_specs.items():
-        node_type = str(spec.get("type", "")).strip()
+    for name, node_config in node_configs.items():
+        node_type = str(node_config.get("type", "")).strip()
         if node_type == _ACTION:
-            if not _is_non_empty_str(spec.get("instructions")):
+            if not _is_non_empty_str(node_config.get("instructions")):
                 raise ValueError(f"Node '{name}' is Action but missing non-empty 'instructions'")
-            created[name] = graph.create_node(Agent, name=name, **_build_action_kwargs(spec, model, tools_by_name))
+            created[name] = graph.create_node(
+                Agent, name=name, **_build_action_kwargs(node_config, model, tools_by_name)
+            )
         elif node_type == _SWITCH:
             created[name] = graph.create_node(
                 AgentSwitch,
                 name=name,
                 model=model,
-                pull_keys=spec.get("pull_keys"),
-                push_keys=spec.get("push_keys"),
+                pull_keys=node_config.get("pull_keys"),
+                push_keys=node_config.get("push_keys"),
             )
         elif node_type == _SUBGRAPH:
             sub = graph.create_node(
                 Graph,
                 name=name,
-                pull_keys=spec.get("pull_keys"),
-                push_keys=spec.get("push_keys"),
+                pull_keys=node_config.get("pull_keys"),
+                push_keys=node_config.get("push_keys"),
             )
             created[name] = sub
-            _compile_graph(sub, normalize_graph_design(spec["sub_graph"]), model, tools)
+            _compile_graph(sub, normalize_graph_design(node_config["sub_graph"]), model, tools)
         elif node_type == _LOOP:
-            max_it = spec.get("max_iterations") if isinstance(spec.get("max_iterations"), int) else 3
-            term = spec.get("terminate_condition_prompt")
+            max_it = node_config.get("max_iterations") if isinstance(node_config.get("max_iterations"), int) else 3
+            term = node_config.get("terminate_condition_prompt")
             term_prompt = term.strip() if isinstance(term, str) else ""
             loop = graph.create_node(
                 Loop,
@@ -569,14 +571,14 @@ def _compile_graph(graph: Graph, graph_obj: dict[str, Any], model: Model, tools:
                 max_iterations=max_it if max_it and max_it > 0 else 3,
                 model=model if term_prompt else None,
                 terminate_condition_prompt=term_prompt or None,
-                pull_keys=spec.get("pull_keys"),
-                push_keys=spec.get("push_keys"),
+                pull_keys=node_config.get("pull_keys"),
+                push_keys=node_config.get("push_keys"),
             )
             created[name] = loop
             _compile_loop(
                 loop,
                 _normalize_scope(
-                    spec["sub_graph"],
+                    node_config["sub_graph"],
                     in_loop_subgraph=True,
                     path=f"graph_design.nodes[{name}].sub_graph",
                 ),
@@ -605,8 +607,8 @@ def _compile_graph(graph: Graph, graph_obj: dict[str, Any], model: Model, tools:
         else:
             edge_obj = graph.create_edge(created[src], created[dst], keys=keys)
 
-        src_spec = node_specs.get(src)
-        if isinstance(src_spec, dict) and str(src_spec.get("type", "")).strip() == _SWITCH:
+        source_node_config = node_configs.get(src)
+        if isinstance(source_node_config, dict) and str(source_node_config.get("type", "")).strip() == _SWITCH:
             cond = str(edge.get("condition", "")).strip()
             bindings.setdefault(src, []).append((edge_obj, cond))
 
@@ -614,36 +616,38 @@ def _compile_graph(graph: Graph, graph_obj: dict[str, Any], model: Model, tools:
 
 
 def _compile_loop(loop: Loop, sub_graph_obj: dict[str, Any], model: Model, tools: list[Callable] | None) -> None:
-    node_specs = {str(n["name"]).strip(): n for n in sub_graph_obj["nodes"] if isinstance(n, dict)}
+    node_configs = {str(n["name"]).strip(): n for n in sub_graph_obj["nodes"] if isinstance(n, dict)}
     tools_by_name = _tool_map(tools)
     created: dict[str, Any] = {}
 
-    for name, spec in node_specs.items():
-        node_type = str(spec.get("type", "")).strip()
+    for name, node_config in node_configs.items():
+        node_type = str(node_config.get("type", "")).strip()
         if node_type == _ACTION:
-            if not _is_non_empty_str(spec.get("instructions")):
+            if not _is_non_empty_str(node_config.get("instructions")):
                 raise ValueError(f"Node '{name}' is Action but missing non-empty 'instructions'")
-            created[name] = loop.create_node(Agent, name=name, **_build_action_kwargs(spec, model, tools_by_name))
+            created[name] = loop.create_node(
+                Agent, name=name, **_build_action_kwargs(node_config, model, tools_by_name)
+            )
         elif node_type == _SWITCH:
             created[name] = loop.create_node(
                 AgentSwitch,
                 name=name,
                 model=model,
-                pull_keys=spec.get("pull_keys"),
-                push_keys=spec.get("push_keys"),
+                pull_keys=node_config.get("pull_keys"),
+                push_keys=node_config.get("push_keys"),
             )
         elif node_type == _SUBGRAPH:
             sub = loop.create_node(
                 Graph,
                 name=name,
-                pull_keys=spec.get("pull_keys"),
-                push_keys=spec.get("push_keys"),
+                pull_keys=node_config.get("pull_keys"),
+                push_keys=node_config.get("push_keys"),
             )
             created[name] = sub
-            _compile_graph(sub, normalize_graph_design(spec["sub_graph"]), model, tools)
+            _compile_graph(sub, normalize_graph_design(node_config["sub_graph"]), model, tools)
         elif node_type == _LOOP:
-            max_it = spec.get("max_iterations") if isinstance(spec.get("max_iterations"), int) else 3
-            term = spec.get("terminate_condition_prompt")
+            max_it = node_config.get("max_iterations") if isinstance(node_config.get("max_iterations"), int) else 3
+            term = node_config.get("terminate_condition_prompt")
             term_prompt = term.strip() if isinstance(term, str) else ""
             nested_loop = loop.create_node(
                 Loop,
@@ -651,14 +655,14 @@ def _compile_loop(loop: Loop, sub_graph_obj: dict[str, Any], model: Model, tools
                 max_iterations=max_it if max_it and max_it > 0 else 3,
                 model=model if term_prompt else None,
                 terminate_condition_prompt=term_prompt or None,
-                pull_keys=spec.get("pull_keys"),
-                push_keys=spec.get("push_keys"),
+                pull_keys=node_config.get("pull_keys"),
+                push_keys=node_config.get("push_keys"),
             )
             created[name] = nested_loop
             _compile_loop(
                 nested_loop,
                 _normalize_scope(
-                    spec["sub_graph"],
+                    node_config["sub_graph"],
                     in_loop_subgraph=True,
                     path=f"graph_design.nodes[{loop.name}].sub_graph.nodes[{name}].sub_graph",
                 ),
@@ -682,7 +686,6 @@ def _compile_loop(loop: Loop, sub_graph_obj: dict[str, Any], model: Model, tools
             if dst == _BUILTIN_CONTROLLER:
                 raise ValueError("Loop edge CONTROLLER -> CONTROLLER is not allowed")
             if dst == _BUILTIN_TERMINATE:
-                # Controller -> TERMINATE is an explicit early-break edge.
                 edge_obj = loop.edge_to_terminate_node(loop._controller, keys=keys)  # type: ignore[attr-defined]
             else:
                 edge_obj = loop.edge_from_controller(created[dst], keys=keys)
@@ -693,8 +696,8 @@ def _compile_loop(loop: Loop, sub_graph_obj: dict[str, Any], model: Model, tools
         else:
             edge_obj = loop.create_edge(created[src], created[dst], keys=keys)
 
-        src_spec = node_specs.get(src)
-        if isinstance(src_spec, dict) and str(src_spec.get("type", "")).strip() == _SWITCH:
+        source_node_config = node_configs.get(src)
+        if isinstance(source_node_config, dict) and str(source_node_config.get("type", "")).strip() == _SWITCH:
             cond = str(edge.get("condition", "")).strip()
             bindings.setdefault(src, []).append((edge_obj, cond))
 

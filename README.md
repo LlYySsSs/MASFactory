@@ -210,6 +210,52 @@ out, _attrs = g.invoke({"query": "I want to learn Python. Where should I start?"
 print(out["answer"])
 ```
 
+## 🛠️ Reusable Skill Example
+
+Skills are loaded explicitly from a directory-based Anthropic-style `SKILL.md` package and attached to an `Agent` with `skills=[...]`.
+
+```python
+import os
+from masfactory import Agent, OpenAIModel, ParagraphMessageFormatter, load_skill
+
+model = OpenAIModel(
+    api_key=os.getenv("OPENAI_API_KEY", ""),
+    model_name=os.getenv("OPENAI_MODEL_NAME", "gpt-4o-mini"),
+)
+
+paper_summary = load_skill("./skills/paper-summary")
+
+agent = Agent(
+    name="researcher",
+    instructions="You are a research assistant.",
+    model=model,
+    formatters=ParagraphMessageFormatter(),
+    skills=[paper_summary],
+)
+```
+
+Example skill package:
+
+```text
+skills/
+└── paper-summary/
+    ├── SKILL.md
+    ├── template.md
+    └── examples/
+        └── sample.md
+```
+
+`SKILL.md`:
+
+```md
+---
+name: paper-summary
+description: Summarize research papers clearly
+---
+Focus on the paper's problem, method, findings, and limitations.
+Keep the summary concise and faithful.
+```
+
 ## 🌟 Application Demo
 
 Below are two example applications built with MASFactory for two common scenarios: a daily AI paper briefing and a paper-to-PPT workflow. The workflow code behind both products is open-sourced in this repository for reuse and study.

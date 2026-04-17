@@ -17,7 +17,7 @@ class ToolAdapter():
     def __str__(self) -> str:
         return f"ToolAdapter with tools: {self._tools}"
     
-    def call(self, name: str, arguments: dict) -> str:
+    def call(self, name: str, arguments: dict) -> Any:
         return self._tool_map[name](**arguments)
 
     @property

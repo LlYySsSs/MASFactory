@@ -66,9 +66,7 @@ g.build()
 ### 示例：共享 model，隔离 memory
 
 ```python
-from masfactory import Agent, NodeTemplate, OpenAIModel
-from masfactory.core.node_template import Shared, Factory
-from masfactory.adapters.memory import HistoryMemory
+from masfactory import Agent, NodeTemplate, OpenAIModel, HistoryMemory, Shared, Factory
 
 model = OpenAIModel(model_name="gpt-4o-mini", api_key="...", base_url="...")
 
@@ -158,8 +156,7 @@ defaults 只在字段缺失时生效；overrides 总是覆盖。
 3. 按 Phase 节点名覆写某一个 Phase 的 `phase_instructions`。
 
 ```python
-from masfactory import RootGraph, Loop, Agent, NodeTemplate
-from masfactory.core.node_template import template_defaults_for, template_overrides_for
+from masfactory import RootGraph, Loop, Agent, NodeTemplate, template_defaults_for, template_overrides_for
 
 Phase = NodeTemplate(
     Loop,

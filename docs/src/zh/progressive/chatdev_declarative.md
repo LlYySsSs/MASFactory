@@ -26,7 +26,7 @@
 
 ```python
 import os
-from masfactory import RootGraph, Agent, OpenAIModel, NodeTemplate, HistoryMemory
+from masfactory import RootGraph, Agent, OpenAIModel, NodeTemplate, HistoryMemory, Shared, Factory
 
 # 1) 构建模型适配器（以 OpenAI API 为例）
 model = OpenAIModel(
@@ -35,14 +35,13 @@ model = OpenAIModel(
     base_url=os.getenv("BASE_URL"),
 )
 
-history = HistoryMemory(top_k=12)
 
 # 2) 声明两个节点模板（NodeTemplate）
 
 Instructor = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions=(
         "你是 Instructor，你在指导 Assistant 按照用户需求来完成任务。阅读用户的需求，并指导 Assistant。\n"
     ),
@@ -52,8 +51,8 @@ Instructor = NodeTemplate(
 )
 Assistant = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions=(
         "你是 Assistant。 请给予用户需求和Instructor的指导来完成任务。\n"
     ),
@@ -103,7 +102,7 @@ Step 1 的 Phase 仅执行一次。实际场景中，一个 Phase 往往需要�
 
 ```python
 import os
-from masfactory import RootGraph, Loop, Agent, OpenAIModel, NodeTemplate, HistoryMemory
+from masfactory import RootGraph, Loop, Agent, OpenAIModel, NodeTemplate, HistoryMemory, Shared, Factory
 
 model = OpenAIModel(
     model_name=os.getenv("MODEL", "gpt-4o-mini"),
@@ -111,12 +110,11 @@ model = OpenAIModel(
     base_url=os.getenv("BASE_URL"),
 )
 
-history = HistoryMemory(top_k=12)
 
 Instructor = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions=(
         "你是 Instructor，你在指导 Assistant 按照用户需求来完成任务。阅读用户的需求,以及上一轮次中的Assistant的响应，给Assistant提出改进意见。\n"
     ),
@@ -127,8 +125,8 @@ Instructor = NodeTemplate(
 )
 Assistant = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions=(
         "你是 Assistant。 请给予用户需求和Instructor的指导来完成任务。\n"
     ),
@@ -193,7 +191,7 @@ Step 2 的循环体是“固定顺序”的：每轮总是 `Instructor → Assis
 
 ```python
 import os
-from masfactory import RootGraph, Loop, LogicSwitch, Agent, OpenAIModel, NodeTemplate, HistoryMemory
+from masfactory import RootGraph, Loop, LogicSwitch, Agent, OpenAIModel, NodeTemplate, HistoryMemory, Shared, Factory
 
 model = OpenAIModel(
     model_name=os.getenv("MODEL", "gpt-4o-mini"),
@@ -201,7 +199,6 @@ model = OpenAIModel(
     base_url=os.getenv("BASE_URL"),
 )
 
-history = HistoryMemory(top_k=12)
 
 assistant_first = True  # 使用一个超参数决定发言顺序
 
@@ -221,8 +218,8 @@ Switch = NodeTemplate(LogicSwitch, routes={"assistant": to_assistant, "instructo
 
 Assistant = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions=(
         "你是 Assistant（CPO）。请在现有草案基础上补充改进。\n"
     ),
@@ -235,8 +232,8 @@ Assistant = NodeTemplate(
 )
 Instructor = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions=(
         "你是 Instructor（CEO）。请审阅草案并给出可执行计划。\n"
     ),
@@ -295,7 +292,7 @@ print(out_attrs["plan"])
 
 ```python
 import os
-from masfactory import Loop, LogicSwitch, Agent, OpenAIModel, NodeTemplate, HistoryMemory
+from masfactory import Loop, LogicSwitch, Agent, OpenAIModel, NodeTemplate, HistoryMemory, Shared, Factory
 
 model = OpenAIModel(
     model_name=os.getenv("MODEL", "gpt-4o-mini"),
@@ -303,7 +300,6 @@ model = OpenAIModel(
     base_url=os.getenv("BASE_URL"),
 )
 
-history = HistoryMemory(top_k=12)
 
 assistant_first = True
 
@@ -318,8 +314,8 @@ Switch = NodeTemplate(LogicSwitch, routes={"assistant": to_assistant, "instructo
 
 Assistant = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions="你是 Assistant（CPO）。请补充/改进草案，并仅输出需要更新的字段（JSON）。",
     prompt_template=[
         "【阶段目标】\n{phase_instructions}\n",        # 通过 pull_keys 指定使用该字段，运行时Agent从Loop的Attributes获取该字段的值
@@ -332,8 +328,8 @@ Assistant = NodeTemplate(
 )
 Instructor = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions="你是 Instructor（CEO）。请审阅草案并产出计划，并仅输出需要更新的字段（JSON）。",
     prompt_template=[
         "【阶段目标】\n{phase_instructions}\n",
@@ -449,6 +445,8 @@ from masfactory import (
     OpenAIModel,
     NodeTemplate,
     HistoryMemory,
+    Shared,
+    Factory,
     template_overrides_for,
 )
 
@@ -458,7 +456,6 @@ model = OpenAIModel(
     base_url=os.getenv("BASE_URL"),
 )
 
-history = HistoryMemory(top_k=12)
 
 # 1) 读取 ChatDev Lite 的工程 prompt（仓库内）
 CONFIG_DIR = Path("applications/chatdev_lite/assets/config")
@@ -534,8 +531,8 @@ Switch = NodeTemplate(LogicSwitch, routes={"assistant": to_assistant, "instructo
 
 Assistant = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions="",
     prompt_template=[
         "{chatdev_prompt}\n\n",
@@ -548,8 +545,8 @@ Assistant = NodeTemplate(
 )
 Instructor = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions="",
     prompt_template=[
         "{chatdev_prompt}\n\n",

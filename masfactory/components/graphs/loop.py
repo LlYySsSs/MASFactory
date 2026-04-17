@@ -73,7 +73,7 @@ class Loop(BaseGraph):
             attributes: Initial loop attributes.
             initial_messages: Initial cached controller messages.
             edges: Optional declarative edge definitions for inner nodes.
-            nodes: Optional declarative node definitions for inner nodes.
+            nodes: Optional declarative node definitions for inner nodes as `(name, NodeTemplate)` entries.
             build_func: Optional custom build function.
         """
         self._init_nodes = nodes
@@ -397,8 +397,9 @@ class Loop(BaseGraph):
         """Build the loop by materializing declarative nodes/edges and building internal nodes.
 
         This supports a declarative style where `nodes=[...]` and `edges=[...]` define the loop
-        body. It wires edges with special handling for the internal controller/terminate nodes,
-        then builds the controller and terminate nodes, and finally calls `BaseGraph.build()`.
+        body. Declarative loop nodes are NodeTemplate blueprints; special handling is still applied
+        for the internal controller/terminate nodes when wiring edges. It then builds the controller
+        and terminate nodes, and finally calls `BaseGraph.build()`.
 
         The build is idempotent: calling `build()` multiple times is a no-op after the first
         successful build.

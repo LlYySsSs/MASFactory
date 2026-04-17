@@ -32,7 +32,8 @@ model = OpenAIModel(
     base_url=os.getenv("BASE_URL"),
 )
 
-history = HistoryMemory(top_k=12)
+instructor_history = HistoryMemory(top_k=12)
+assistant_history = HistoryMemory(top_k=12)
 
 g = RootGraph(name="p1_workflow_imp")
 
@@ -40,7 +41,7 @@ instructor = g.create_node(
     Agent,
     name="instructor",
     model=model,
-    memories=[history],
+    memories=[instructor_history],
     instructions=(
         "你是 Instructor，你在指导 Assistant 按照用户需求来完成任务。阅读用户的需求，并指导 Assistant。\n"
     ),
@@ -50,7 +51,7 @@ assistant = g.create_node(
     Agent,
     name="assistant",
     model=model,
-    memories=[history],
+    memories=[assistant_history],
     instructions=(
         "你是 Assistant。请基于用户需求与 Instructor 的指导完成任务。\n"
     ),
@@ -94,7 +95,8 @@ model = OpenAIModel(
     base_url=os.getenv("BASE_URL"),
 )
 
-history = HistoryMemory(top_k=12)
+instructor_history = HistoryMemory(top_k=12)
+assistant_history = HistoryMemory(top_k=12)
 
 g = RootGraph(name="p2_loop_edge_imp")
 
@@ -109,7 +111,7 @@ assistant = dialog.create_node(
     Agent,
     name="assistant",
     model=model,
-    memories=[history],
+    memories=[assistant_history],
     instructions="你是 Assistant。请基于用户需求与 Instructor 的指导完成任务。",
     prompt_template=(
         "【USER DEMAND】\n{user_demand}\n\n"
@@ -120,7 +122,7 @@ instructor = dialog.create_node(
     Agent,
     name="instructor",
     model=model,
-    memories=[history],
+    memories=[instructor_history],
     instructions="你是 Instructor。阅读用户需求与上一轮 assistant_response，给出改进指导。",
     prompt_template=[
         "【USER DEMAND】\n{user_demand}\n\n",
@@ -169,7 +171,8 @@ model = OpenAIModel(
     base_url=os.getenv("BASE_URL"),
 )
 
-history = HistoryMemory(top_k=12)
+assistant_history = HistoryMemory(top_k=12)
+instructor_history = HistoryMemory(top_k=12)
 
 g = RootGraph(
     name="p3_switch_attr_imp",
@@ -202,7 +205,7 @@ assistant = phase.create_node(
     Agent,
     name="assistant",
     model=model,
-    memories=[history],
+    memories=[assistant_history],
     instructions=(
         "你是 Assistant（CPO）。请在现有草案基础上补充改进。\n"
         "输出要求：仅输出 JSON，且必须包含字段：draft（str）。"
@@ -219,7 +222,7 @@ instructor = phase.create_node(
     Agent,
     name="instructor",
     model=model,
-    memories=[history],
+    memories=[instructor_history],
     instructions=(
         "你是 Instructor（CEO）。请审阅草案并给出可执行计划。\n"
         "输出要求：仅输出 JSON，且必须包含字段：plan（str）。必要时可同时输出 draft（str）。"
@@ -297,7 +300,8 @@ class Phase(Loop):
         self._instructor_instructions = instructor_instructions
         self._assistant_instructions = assistant_instructions
         self._instructor_first = instructor_first
-        self._history = HistoryMemory(top_k=12)
+        self._instructor_history = HistoryMemory(top_k=12)
+        self._assistant_history = HistoryMemory(top_k=12)
 
     @masf_hook(Node.Hook.BUILD)
     def build(self):
@@ -318,7 +322,7 @@ class Phase(Loop):
             Agent,
             name="assistant",
             model=self._model,
-            memories=[self._history],
+            memories=[self._assistant_history],
             instructions=self._assistant_instructions,
             pull_keys=self._pull_keys,
             push_keys=self._push_keys,
@@ -327,7 +331,7 @@ class Phase(Loop):
             Agent,
             name="instructor",
             model=self._model,
-            memories=[self._history],
+            memories=[self._instructor_history],
             instructions=self._instructor_instructions,
             pull_keys=self._pull_keys,
             push_keys=self._push_keys,

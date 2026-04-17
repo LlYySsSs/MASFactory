@@ -58,6 +58,6 @@ PlannerGraph = NodeTemplate(
     ],
 )
 
-__ALL__ = [
+__all__ = [
     "PlannerGraph",
 ]

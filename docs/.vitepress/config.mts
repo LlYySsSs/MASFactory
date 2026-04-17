@@ -55,6 +55,7 @@ export default defineConfig({
           { text: 'VibeGraphing', link: '/guide/vibegraphing' },
           { text: 'Context Adapters', link: '/guide/context_adapters' },
           { text: 'Tool Calling', link: '/guide/tools' },
+          { text: 'Skills', link: '/guide/skills' },
           { text: 'MASFactory Visualizer', link: '/guide/visualizer' },
           { text: 'Runtime Hooks', link: '/guide/runtime_hooks' },
         ]
@@ -135,6 +136,7 @@ export default defineConfig({
               { text: 'VibeGraphing', link: '/zh/guide/vibegraphing' },
               { text: 'Memory/RAG/MCP', link: '/zh/guide/context_adapters' },
               { text: '工具调用', link: '/zh/guide/tools' },
+              { text: 'Skills', link: '/zh/guide/skills' },
               { text: 'MASFactory Visualizer', link: '/zh/guide/visualizer' },
               { text: '运行时 Hooks', link: '/zh/guide/runtime_hooks' },
             ]

@@ -3,7 +3,7 @@
 This page explains what `Agent` does at runtime, with an emphasis on **how LLM context is assembled**:
 inputs, `attributes`, `MessageFormatter`s, `ContextBlock`s (RAG / Memory / MCP), and tool calls.
 
-Source of truth: `masfactory/components/agents/agent.py`
+Source of truth: `masfactory/components/agents/agent.py`, `masfactory/components/agents/request_context.py`
 
 ---
 
@@ -14,6 +14,13 @@ Source of truth: `masfactory/components/agents/agent.py`
 - `system_prompt: str` (written into `messages[0]`)
 - `user_prompt: str` (written into the last user message)
 - `messages: list[dict]` (passed to `model.invoke(...)`)
+
+The Observe phase now goes through a dedicated `RequestAssembler`, but it still preserves four semantic layers instead of flattening everything into one blob:
+
+1. **Directive layer**: base instructions, runtime instruction overrides, formatter-driven output constraints, and loaded skills
+2. **Conversation layer**: `HistoryMemory` messages kept as chat messages with role and chronology intact
+3. **Resource context layer**: passive Memory / RAG / MCP blocks injected into `CONTEXT`
+4. **Action layer**: user tools plus active context retrieval tools exposed via `ToolAdapter`
 
 In MASFactory, context assembly is intentionally **payload-first**:
 
@@ -87,7 +94,7 @@ into the user payload as `CONTEXT`.
 When `active=True`, the Agent provides two extra tools for the model:
 
 - `list_context_sources()`
-- `retrieve_context(source, query, top_k=...)`
+- `retrieve_context(source, query_text, top_k=...)`
 
 This enables “reason first, retrieve later” workflows.
 

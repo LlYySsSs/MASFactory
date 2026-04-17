@@ -208,6 +208,52 @@ out, _attrs = g.invoke({"query": "我想学习 Python，但不知道从哪里开
 print(out["answer"])
 ```
 
+## 🛠️ 可复用 Skill 示例
+
+Skill 采用 Anthropic 风格的目录包格式，并通过 `load_skill(...)` 显式加载，然后用 `skills=[...]` 挂到 `Agent` 上。
+
+```python
+import os
+from masfactory import Agent, OpenAIModel, ParagraphMessageFormatter, load_skill
+
+model = OpenAIModel(
+    api_key=os.getenv("OPENAI_API_KEY", ""),
+    model_name=os.getenv("OPENAI_MODEL_NAME", "gpt-4o-mini"),
+)
+
+paper_summary = load_skill("./skills/paper-summary")
+
+agent = Agent(
+    name="researcher",
+    instructions="你是研究助手。",
+    model=model,
+    formatters=ParagraphMessageFormatter(),
+    skills=[paper_summary],
+)
+```
+
+示例 Skill 目录：
+
+```text
+skills/
+└── paper-summary/
+    ├── SKILL.md
+    ├── template.md
+    └── examples/
+        └── sample.md
+```
+
+`SKILL.md` 示例：
+
+```md
+---
+name: paper-summary
+description: 清晰总结研究论文
+---
+重点关注论文的问题、方法、结果与局限性。
+保持总结简洁且忠实原文。
+```
+
 ## 🌟 示例应用
 
 下面展示的是两个基于 MASFactory 构建的示例应用，分别面向“AI 论文日报”和“Paper2PPT”两个典型场景。它们对应的 workflow 代码都已经在本仓库开源，方便学习和复用 MASFactory 的多智能体编排思路。

@@ -16,13 +16,13 @@ class Graph(BaseGraph):
     Graph is both a node and a container. It can be nested inside another graph.
     """
     def __init__(
-        self, 
-        name, 
-        pull_keys: dict[str, dict|str] | None = None, 
-        push_keys: dict[str, dict|str] | None = None, 
+        self,
+        name,
+        pull_keys: dict[str, dict|str] | None = None,
+        push_keys: dict[str, dict|str] | None = None,
         attributes: dict[str, object] | None = None,
         edges: list[tuple[str, str] | tuple[str, str, dict[str, dict|str] ]]|None=None,
-        nodes: list[tuple] | None = None,
+        nodes: list[tuple[str, NodeTemplate]] | None = None,
         build_func:Callable|None = None,
     ):
         """Create a composite graph node with internal entry/exit ports.
@@ -35,7 +35,7 @@ class Graph(BaseGraph):
             edges: Optional declarative edge definitions. Each item is either:
                 - `(from_name, to_name)`
                 - `(from_name, to_name, edge_keys)`
-            nodes: Optional declarative node definitions passed into `create_node`.
+            nodes: Optional declarative node definitions as `(name, NodeTemplate)` entries.
             build_func: Optional custom build function executed before child build.
                 Signature: `(graph: Graph) -> None`.
         """
@@ -115,12 +115,9 @@ class Graph(BaseGraph):
                 target = item[1]
                 others = item[2:]
                 
-                # Unpack kwargs if the last arg is a dict?
-                # BaseGraph.create_node handles kwargs in *args if target is NodeTemplate (via check I added)
-                # But for Node class instantiation, we might want to be explicit.
-                # However, create_node(cls, *args, **kwargs) passes args/kwargs to constructor.
-                # So just passing *others is fine.
-                
+                # Declarative `nodes=[...]` is intended to carry NodeTemplate blueprints.
+                # The underlying create_node(...) API is broader, but the declarative Graph DSL
+                # should stay template-oriented so graph definitions remain complete blueprints.
                 self.create_node(target, *others, name=name)
 
         # Create edges from declarative `edges` entries.

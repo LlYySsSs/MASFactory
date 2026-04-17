@@ -74,6 +74,6 @@ RoleAssignerGraph = NodeTemplate(
    ]
 )
 
-__ALL__=[
+__all__=[
    "RoleAssignerGraph"
 ]

@@ -76,6 +76,7 @@ def serialize_root_graph(root) -> SerializedGraph:
     node_line_numbers: dict[str, int] = {}
     node_file_paths: dict[str, str] = {}
     node_aliases: dict[str, list[str]] = {}
+    node_skills: dict[str, object] = {}
 
     # RootGraph entry/exit should be displayed as "entry"/"exit" for UX consistency.
     root_entry = getattr(root, "_entry", None)
@@ -218,6 +219,12 @@ def serialize_root_graph(root) -> SerializedGraph:
                         node_prompt_templates[nid] = "\n".join(str(x) for x in tmpl)
                 except Exception:
                     pass
+                try:
+                    skill_meta = getattr(node, "_skill_metadata", None)
+                    if isinstance(skill_meta, list) and skill_meta:
+                        node_skills[nid] = _safe_obj(skill_meta)
+                except Exception:
+                    pass
 
         if parent:
             subgraphs.setdefault(parent, [])
@@ -332,5 +339,7 @@ def serialize_root_graph(root) -> SerializedGraph:
         graph_payload["nodeInstructions"] = node_instructions
     if node_prompt_templates:
         graph_payload["nodePromptTemplates"] = node_prompt_templates
+    if node_skills:
+        graph_payload["nodeSkills"] = node_skills
 
     return SerializedGraph(graph=graph_payload)

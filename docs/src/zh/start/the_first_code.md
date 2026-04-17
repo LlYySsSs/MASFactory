@@ -28,7 +28,7 @@
 />
 
 ```python
-from masfactory import RootGraph, Agent, OpenAIModel, NodeTemplate, HistoryMemory
+from masfactory import RootGraph, Agent, OpenAIModel, NodeTemplate, HistoryMemory, Shared, Factory
 
 model = OpenAIModel(
     api_key="YOUR_API_KEY",
@@ -36,8 +36,11 @@ model = OpenAIModel(
     model_name="gpt-4o-mini",
 )
 
-history = HistoryMemory(top_k=12)
-BaseAgent = NodeTemplate(Agent, model=model, memories=[history])
+BaseAgent = NodeTemplate(
+    Agent,
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
+)
 
 g = RootGraph(
     name="qa_two_stage",
@@ -76,6 +79,10 @@ model = OpenAIModel(
 ::: tip 为什么 Agent 读不到 attributes？
 `Agent` 的 `pull_keys/push_keys` 默认值是 `{}`， 在此设定下，Agent 不会读取 attributes，也不会回写 attributes。  
 如果你希望 Agent 直接读取图的 attributes，要显式设置 `pull_keys` 为所需字段，如果设置 `pull_keys=None` 则从图上获取所有 attributes。
+:::
+
+::: info 想复用能力包？
+如果你希望在多个 Agent 之间复用 Anthropic 风格 `SKILL.md` 能力包，请看：[Skills](/zh/guide/skills)。
 :::
 
 ---

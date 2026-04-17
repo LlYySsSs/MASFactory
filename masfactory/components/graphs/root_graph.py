@@ -13,7 +13,7 @@ class RootGraph(Graph):
         name: str,
         attributes: dict[str, object] | None = None,
         edges: list[tuple[str, str] | tuple[str, str, dict[str, dict|str] ]]|None=None,
-        nodes: list[tuple[str,NodeTemplate]] | None = None,
+        nodes: list[tuple[str, NodeTemplate]] | None = None,
     ):
         """Create a RootGraph.
 
@@ -21,7 +21,7 @@ class RootGraph(Graph):
             name: Graph name.
             attributes: Default attributes for this graph.
             edges: Optional declarative edge definitions (see `Graph.__init__`).
-            nodes: Optional declarative node definitions (see `Graph.__init__`).
+            nodes: Optional declarative node definitions as `(name, NodeTemplate)` entries.
         """
         super().__init__(name=name, attributes=attributes, edges=edges, nodes=nodes)
         self._input = {}

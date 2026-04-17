@@ -3,7 +3,7 @@
 这页聚焦 `Agent` 在运行时到底做了什么，尤其是 **LLM 上下文是如何组建的**：  
 输入字段、`attributes`、`MessageFormatter`、`ContextBlock`（RAG / Memory / MCP）以及工具调用如何一起工作。
 
-源码参考：`masfactory/components/agents/agent.py`
+源码参考：`masfactory/components/agents/agent.py`、`masfactory/components/agents/request_context.py`
 
 ---
 
@@ -14,6 +14,13 @@
 - `system_prompt: str`（写入 `messages[0]`）
 - `user_prompt: str`（写入最后一条 user message）
 - `messages: list[dict]`（传给 `model.invoke(...)` 的 chat messages）
+
+现在 Observe 阶段会经过专门的 `RequestAssembler`，但依然保留四层语义边界，而不是把所有信息压成一个通用 blob：
+
+1. **Directive 层**：基础 instructions、运行时指令覆盖、formatter 生成的输出约束、loaded skills
+2. **Conversation 层**：`HistoryMemory` 仍以带 role 和时序的 chat messages 进入模型
+3. **Resource context 层**：被动的 Memory / RAG / MCP block 继续注入到 `CONTEXT`
+4. **Action 层**：用户 tools 与 active context retrieval tools 一起通过 `ToolAdapter` 暴露
 
 在 MASFactory 里，**上下文的组装不是“拼接字符串”**，而是：
 
@@ -87,7 +94,7 @@ RAG / Memory / MCP 都统一为 **ContextProvider**：
 当 provider 配置为 `active=True` 时，Agent 会在本轮临时注入两个工具：
 
 - `list_context_sources()`：列出可用 source（含去重后的名字）
-- `retrieve_context(source, query, top_k=...)`：按 source 拉取 blocks，并返回“结构化 blocks + 渲染文本”
+- `retrieve_context(source, query_text, top_k=...)`：按 source 拉取 blocks，并返回“结构化 blocks + 渲染文本”
 
 这样模型可以 **先看当前对话与任务**，再决定是否触发检索。
 

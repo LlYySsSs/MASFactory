@@ -1,20 +1,19 @@
-from dataclasses import asdict, replace
 from masfactory.core.node import Node
 from masfactory.adapters.model import Model, ModelResponseType
 from masfactory.utils.hook import masf_hook
 from masfactory.adapters.tool_adapter import ToolAdapter
 from masfactory.adapters.memory import Memory,HistoryMemory
 from masfactory.adapters.retrieval import Retrieval
+from masfactory.skills import Skill, SkillSet
 from typing import Any, Callable
 import re
 import json
 from masfactory.core.message import MessageFormatter, StatefulFormatter
-from masfactory.adapters.context import ContextComposer, ContextQuery, DefaultContextRenderer
+from masfactory.adapters.context import ContextQuery, DefaultContextRenderer
+from masfactory.components.agents.request_context import RequestAssembler
 from tenacity import retry,stop_after_attempt,wait_exponential
 _UNSET = object()
 
-# Some models might follow chain-of-thought style prompts and emit reasoning blocks.
-# We strip these blocks before handing the content to output formatters to keep parsing robust.
 _THINKING_BLOCK_PATTERN = re.compile(
     r"<\s*(think|thinking)\s*>.*?<\s*/\s*\1\s*>",
     flags=re.IGNORECASE | re.DOTALL,
@@ -88,6 +87,7 @@ def format_content_and_get_fields(content:str,format_dict:dict,uncontexted_knowl
     formatted_content = str_format(content,format_dict,value_renderer=value_renderer)
     uncontexted_knowledges_keys = uncontexted_knowledges_keys - fields
     return formatted_content,uncontexted_knowledges_keys
+
 class Agent(Node):
     """
     LLM-driven agent node.
@@ -113,6 +113,7 @@ class Agent(Node):
         tools: list[Callable] | None = None,
         memories: list[Memory] | None = None,
         retrievers: list[Retrieval] | None = None,
+        skills: list[Skill] | None = None,
         pull_keys: dict[str, dict | str] | None | object = _UNSET,
         push_keys: dict[str, dict | str] | None | object = _UNSET,
         model_settings: dict | None = None,
@@ -135,6 +136,7 @@ class Agent(Node):
             tools: Optional tool callables available to the agent.
             memories: Optional memories attached to the agent.
             retrievers: Optional retrieval backends attached to the agent.
+            skills: Optional loaded skill packages attached to the agent.
             pull_keys: Pull key policy for attributes. If omitted, defaults to `{}` for Agents.
             push_keys: Push key policy for attributes. If omitted, defaults to `{}` for Agents.
             model_settings: Provider/model settings passed into the adapter invoke call.
@@ -164,7 +166,12 @@ class Agent(Node):
             raise ValueError("Agent requires a non-None model instance.")
         if isinstance(instructions,list):
             instructions = '\n'.join(instructions)
-        self._instructions:str = instructions
+        self._base_instructions: str = instructions
+        self._runtime_instruction_override: str | None = None
+        self._skills: list[Skill] = list(skills) if skills else []
+        self._skill_set = SkillSet(self._skills)
+        self._skill_metadata: list[dict[str, object]] = self._skill_set.metadata()
+        self._instructions: str = self._base_instructions
         self._prompt_template:str|None = prompt_template
         in_formatter = None
         out_formatter = None
@@ -279,8 +286,16 @@ class Agent(Node):
             return formatted_instructions
         else:
             return ""
+    def _compose_instructions(self) -> str:
+        base_instructions = (
+            self._runtime_instruction_override
+            if self._runtime_instruction_override is not None
+            else self._instructions
+        )
+        return self._skill_set.compose(base_instructions)
+
     def _system_prompt(self) -> dict|str:
-        formatted_instructions = self._prompt_template_format(self._instructions)
+        formatted_instructions = self._prompt_template_format(self._compose_instructions())
         return formatted_instructions
         
     def _input_prompt(self) -> dict:
@@ -360,160 +375,49 @@ class Agent(Node):
     def _forward(self, input:dict[str,object]) -> dict:
         return self.step(input)
 
+    def _reset_invocation_state(self) -> None:
+        """Clear per-invocation prompt and active-provider state."""
+        self._context_knowledges = {}
+        self._uncontexted_knowledges_keys = set()
+        self._current_context_query = None
+        self._active_context_providers = []
+        self._active_context_provider_map = {}
+        self._active_context_source_entries = []
+        self._active_context_source_aliases = {}
+        self._tool_adapter = ToolAdapter(self._user_tools) if self._user_tools else None
+
     def observe(self, input_dict: dict[str, object]) -> tuple[str, str, list[dict]]:
         """Prepare prompts and conversation messages for one model round."""
+        self._reset_invocation_state()
         self._update_context_knowledges(input_dict)
         self._configure_stateful_formatters()
 
-        system_prompt = self._in_formatter.dump(self._system_prompt())
-        user_payload = self._user_prompt()
-
-        query_text = self._build_context_query_text(input_dict, user_payload)
-        base_query = ContextQuery(
-            query_text=query_text,
-            inputs=self._context_knowledges,
-            attributes=self._attributes_store,
-            node_name=self.name,
+        assembler = RequestAssembler(
+            name=self.name,
+            formatter=self._in_formatter,
+            output_keys_prompt_factory=self._output_keys_prompt,
+            context_query_builder=self._build_context_query_text,
+            memories=self._memories,
+            history_memories=self._history_memories,
+            retrievers=self._retrievers,
+            user_tools=self._user_tools,
+            context_tool_renderer=self._context_tool_renderer,
+            user_payload_factory=self._user_prompt,
+        )
+        request_context = assembler.assemble(
+            system_payload=self._system_prompt(),
+            context_knowledges=self._context_knowledges,
+            attributes_store=self._attributes_store,
+            input_dict=input_dict,
         )
 
-        def _is_passive_provider(provider: object) -> bool:
-            if not getattr(provider, "supports_passive", True):
-                return False
-            return bool(getattr(provider, "passive", True))
-
-        def _is_active_provider(provider: object) -> bool:
-            if not getattr(provider, "supports_active", True):
-                return False
-            return bool(getattr(provider, "active", False))
-
-        all_providers = [*self._memories, *self._retrievers]
-        passive_providers = [p for p in all_providers if _is_passive_provider(p)]
-        active_providers = [p for p in all_providers if _is_active_provider(p)]
-
-        composer = ContextComposer(providers=passive_providers, history_providers=[*self._history_memories])
-        history_messages = composer.get_history_messages(base_query, top_k=-1)
-        query = ContextQuery(
-            query_text=query_text,
-            inputs=self._context_knowledges,
-            attributes=self._attributes_store,
-            node_name=self.name,
-            messages=history_messages,
-        )
-        user_payload = composer.inject_user_payload(user_payload, query)
-        # Expose active providers for tool-call retrieval.
-        self._current_context_query = query
-        self._active_context_providers = active_providers
-        # Disambiguate provider labels for tool-call sources.
-        base_labels: list[str] = []
-        for provider in active_providers:
-            label = getattr(provider, "context_label", provider.__class__.__name__)
-            if not isinstance(label, str) or not label.strip():
-                label = provider.__class__.__name__
-            base_labels.append(label)
-
-        from collections import Counter, defaultdict  # noqa: WPS433
-
-        counts = Counter(base_labels)
-        seq: defaultdict[str, int] = defaultdict(int)
-        source_entries: list[tuple[str, str, object]] = []
-        for provider, base_label in zip(active_providers, base_labels):
-            if counts[base_label] == 1:
-                source_name = base_label
-            else:
-                seq[base_label] += 1
-                source_name = f"{base_label}#{seq[base_label]}"
-            source_entries.append((source_name, base_label, provider))
-
-        self._active_context_provider_map = {name: provider for name, _label, provider in source_entries}
-        self._active_context_source_aliases = {
-            base_label: [name for name, label, _p in source_entries if label == base_label]
-            for base_label, cnt in counts.items()
-            if cnt > 1
-        }
-        self._active_context_source_entries = [
-            {"name": name, "label": base_label, "type": provider.__class__.__name__}
-            for name, base_label, provider in source_entries
-        ]
-
-        tools: list[Callable] = list(self._user_tools)
-        if active_providers:
-            existing_names = {t.__name__ for t in tools}
-
-            list_tool_name = "list_context_sources"
-            retrieve_tool_name = "retrieve_context"
-            if list_tool_name in existing_names:
-                list_tool_name = "masfactory_list_context_sources"
-            if retrieve_tool_name in existing_names:
-                retrieve_tool_name = "masfactory_retrieve_context"
-
-            def list_context_sources() -> dict:
-                """List available active context sources for tool-call retrieval.
-
-                Returns:
-                    A dict shaped like:
-                    `{\"sources\": [{\"name\": str, \"type\": str}]}`.
-                """
-                return {"sources": list(self._active_context_source_entries)}
-
-            list_context_sources.__name__ = list_tool_name
-
-            def retrieve_context(source: str, query: str, top_k: int = 8) -> dict:
-                """Retrieve context blocks from a named active source.
-
-                Args:
-                    source: Name from `list_context_sources()` (provider label).
-                    query: Search query text.
-                    top_k: Max number of blocks to return (0 means "as many as possible").
-
-                Returns:
-                    A dict with:
-                    - `provider`: provider label
-                    - `query`: effective query text
-                    - `blocks`: list of structured blocks
-                    - `rendered`: blocks rendered as text for prompting
-                """
-                provider = self._active_context_provider_map.get(source)
-                if provider is None:
-                    aliases = self._active_context_source_aliases.get(source)
-                    if aliases:
-                        raise ValueError(
-                            f"Ambiguous context source: {source}. "
-                            f"Choose one of: {aliases} (call list_context_sources first)."
-                        )
-                    raise ValueError(
-                        f"Unknown context source: {source}. "
-                        f"Available: {sorted(self._active_context_provider_map.keys())}"
-                    )
-                base = self._current_context_query or ContextQuery(query_text=query or "")
-                effective = replace(base, query_text=(query or base.query_text))
-                blocks = provider.get_blocks(effective, top_k=int(top_k))  # type: ignore[attr-defined]
-
-                rendered = ""
-                injected = self._context_tool_renderer.inject({}, [(source, blocks)]) if blocks else {}
-                if injected and "CONTEXT" in injected:
-                    rendered = str(injected["CONTEXT"])
-
-                return {
-                    "provider": source,
-                    "query": effective.query_text,
-                    "blocks": [asdict(b) for b in blocks],
-                    "rendered": rendered,
-                }
-
-            retrieve_context.__name__ = retrieve_tool_name
-
-            tools.extend([list_context_sources, retrieve_context])
-
-        self._tool_adapter = ToolAdapter(tools) if tools else None
-
-        user_prompt = self._in_formatter.dump(user_payload)
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            *history_messages,
-            {"role": "user", "content": user_prompt},
-        ]
-        return system_prompt, user_prompt, messages
+        self._current_context_query = request_context.context_query
+        self._active_context_providers = request_context.active_context_providers
+        self._active_context_provider_map = request_context.active_context_provider_map
+        self._active_context_source_entries = request_context.active_context_source_entries
+        self._active_context_source_aliases = request_context.active_context_source_aliases
+        self._tool_adapter = request_context.tool_adapter
+        return request_context.system_prompt, request_context.user_prompt, request_context.messages
 
     def _build_context_query_text(self, input_dict: dict[str, object], user_payload: dict) -> str:
         """Best-effort query text used by retrieval-style providers."""
@@ -560,11 +464,13 @@ class Agent(Node):
 
         tool_results: list[dict] = []
         for tool_call in tool_calls:
-            tool_call_result = self._tool_adapter.call(tool_call["name"], tool_call["arguments"])
+            tool_name = tool_call["name"]
+            tool_call_result = self._tool_adapter.call(tool_name, tool_call["arguments"])
             tool_results.append(
                 {
                     "role": "tool",
-                    "content": self._in_formatter.render_value(tool_call_result),
+                    "name": tool_name,
+                    "content": tool_call_result,
                     "tool_call_id": tool_call.get("id"),
                 }
             )
@@ -626,16 +532,9 @@ class Agent(Node):
                 # Hook: agent_act_completed
                 self.hooks.dispatch(self.Hook.ACT_COMPLETED, self, tool_calls, tool_results)
 
-                # Preserve existing behavior: append the raw assistant tool-call message
-                # when available (OpenAI), then append tool results.
-                raw_response = response.get("raw_response")
-                assistant_message = None
-                if raw_response is not None:
-                    choices = getattr(raw_response, "choices", None)
-                    if choices:
-                        assistant_message = getattr(choices[0], "message", None)
-                if assistant_message is not None:
-                    messages.append(assistant_message)
+                followup_messages = response.get("followup_messages")
+                if isinstance(followup_messages, list) and followup_messages:
+                    messages.extend(followup_messages)
                 messages.extend(tool_results)
 
         response_content_dict, response_content, system_prompt, user_prompt = _run_once()

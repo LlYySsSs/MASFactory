@@ -10,7 +10,7 @@
 :::
 
 ::: info 版本信息
-当前文档对应 MASFactory v1.0.0
+当前文档对应 MASFactory v1.0.1
 :::
 
 
@@ -311,6 +311,7 @@ class Agent(Node):
 | `tools` | `list[Callable] \| None` | `None` | 工具函数列表 |
 | `memories` | `list[Memory] \| None` | `None` | 记忆适配器列表 |
 | `retrievers` | `list[Retrieval] \| None` | `None` | 检索适配器列表（RAG/MCP 等） |
+| `skills` | `list[Skill] \| None` | `None` | 显式加载并附着在 directive 层的 skill 包 |
 | `pull_keys` | `dict[str,dict|str] \| None` | `{}` | 可见/需要的节点变量键及说明 |
 | `push_keys` | `dict[str,dict|str] \| None` | `{}` | 执行后写回的节点变量键及说明 |
 | `model_settings` | `dict \| None` | `None` | 传递给模型的额外参数 |
@@ -326,6 +327,7 @@ class Agent(Node):
 | `max_tokens` | `int` | - | 最大输出 token 数 |
 | `top_p` | `float` | [0.0, 1.0] | 核采样参数 |
 | `stop` | `list[str]` | - | 停止生成的 token 列表 |
+| `tool_choice` | `str \| dict` | provider-specific | 工具路由模式，或 provider 原生的 tool choice 配置 |
 
 #### 使用示例
 
@@ -343,6 +345,11 @@ agent = Agent(
 
 ::: tip 工具调用处理
 当提供工具时，模型可能产生工具调用响应。Agent 会自动调用并回填结果，然后再次询问模型直到返回最终内容。
+:::
+
+::: info 调用装配
+`Agent.observe(...)` 会把 prompt / messages / tools 的装配委托给 `RequestAssembler`。
+运行时会保留 directives（instructions + skills）、conversation history、passive resource context 与 actions/tools 的独立语义层。
 :::
 
 ---
@@ -840,12 +847,161 @@ class DynamicAgent(Agent):
 #### 特性
 
 - **动态指令**：运行时会从输入消息里读取 `instruction_key` 对应字段，并覆盖本轮指令
+- **回退语义**：如果该字段缺失，则继续使用 `default_instructions`
 - **灵活配置**：支持自定义指令键名
 - **完整功能**：继承 Agent 的所有功能
 
-::: warning 注意
-当前实现要求输入消息中必须包含 `instruction_key` 对应字段；若缺失，会在执行时触发 `KeyError`。
-:::
+---
+
+## Skills {#skills}
+
+MASFactory Skills 是基于 Anthropic 风格 `SKILL.md` 的显式目录包。
+它们由用户在代码中加载，并通过 `Agent(..., skills=[...])` 挂载到 Agent 上。
+
+### Skill 类
+
+```python
+@dataclass(frozen=True)
+class Skill:
+    name: str
+    description: str | None
+    body: str
+    skill_dir: Path
+    skill_md_path: Path
+    frontmatter: dict[str, Any] = field(default_factory=dict)
+    examples: list[Path] = field(default_factory=list)
+    templates: list[Path] = field(default_factory=list)
+    references: list[Path] = field(default_factory=list)
+    scripts: list[Path] = field(default_factory=list)
+    raw_markdown: str = ""
+```
+
+解析后的 Anthropic 风格 Skill 包对象，可被 MASFactory Agent 复用。
+
+#### 重要字段
+
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `name` | `str` | Skill 名称；如果 frontmatter 缺失 `name`，会回退到目录名。 |
+| `description` | `str \| None` | frontmatter 中的可选描述。 |
+| `body` | `str` | 从 `SKILL.md` 中提取出的主体 markdown 指令。 |
+| `skill_dir` | `Path` | Skill 包的根目录。 |
+| `skill_md_path` | `Path` | 被解析的 `SKILL.md` 绝对路径。 |
+| `frontmatter` | `dict[str, Any]` | 解析后的 YAML frontmatter 映射。 |
+| `examples` | `list[Path]` | 在 `examples/` 中发现的 supporting files。 |
+| `templates` | `list[Path]` | 在 skill 根目录发现的 markdown 模板文件。 |
+| `references` | `list[Path]` | 包内发现的其他 supporting files。 |
+| `scripts` | `list[Path]` | 在 `scripts/` 中发现的文件。 |
+| `raw_markdown` | `str` | `SKILL.md` 的原始文本内容。 |
+
+#### 重要属性
+
+| 属性 | 类型 | 描述 |
+|------|------|------|
+| `source_path` | `str` | 规范化后的 skill 根目录路径。 |
+
+#### 重要方法
+
+| 方法 | 返回值 | 描述 |
+|------|------|------|
+| `metadata()` | `dict[str, object]` | 给 Agent / visualizer 使用的稳定元数据。 |
+| `render_supporting_files(label, paths)` | `str \| None` | 以有边界的方式渲染 supporting files 进入 prompt。 |
+| `render_section()` | `str` | 渲染单个完整 skill 指令区块。 |
+
+### SkillSet 类
+
+```python
+@dataclass(frozen=True)
+class SkillSet:
+    skills: list[Skill] = field(default_factory=list)
+```
+
+供 Agent 消费的 skill 侧组合视图。
+它负责 skill 渲染与 metadata 组合，因此 `Agent` 不需要直接读取 skill 文件。
+
+#### 核心方法
+
+- `render_instructions() -> str`：渲染 `[Loaded Skills]` 区块
+- `compose(base_instructions: str) -> str`：把 skill 渲染结果追加到基础 instructions 后
+- `metadata() -> list[dict[str, object]]`：返回已加载 skills 的稳定元数据
+
+### load_skill()
+
+```python
+def load_skill(path: str | Path) -> Skill
+```
+
+从目录中加载一个 Anthropic 风格 Skill 包。
+
+**参数：**
+- `path`：Skill 目录路径，目录中必须包含 `SKILL.md`
+
+**返回：**
+- `Skill`：包含规范化路径和 supporting files 信息的解析结果
+
+**异常：**
+- `SkillNotFoundError`：目录不存在，或缺少 `SKILL.md`
+- `InvalidSkillPackageError`：路径存在，但不是合法的 skill 包目录
+- `SkillParseError`：`SKILL.md` 无法读取或无法解析为合法 Skill 定义
+
+**示例：**
+
+```python
+from masfactory import load_skill
+
+paper_summary = load_skill("./skills/paper-summary")
+```
+
+### load_skills()
+
+```python
+def load_skills(paths: Iterable[str | Path]) -> list[Skill]
+```
+
+按给定顺序批量加载多个 Skill 包。
+
+**参数：**
+- `paths`：Skill 目录路径迭代器
+
+**返回：**
+- `list[Skill]`：保持输入顺序的 Skill 列表
+
+**异常：**
+- `SkillNotFoundError`：任一目录不存在，或缺少 `SKILL.md`
+- `InvalidSkillPackageError`：任一路径不是合法的 skill 包目录
+- `SkillParseError`：任一 `SKILL.md` 无法解析
+
+**说明：**
+- `load_skills()` 采用 fail-fast 语义，遇到第一个非法 skill 包就立即停止
+
+**示例：**
+
+```python
+from masfactory import load_skills
+
+paper_summary, review_writing = load_skills([
+    "./skills/paper-summary",
+    "./skills/review-writing",
+])
+```
+
+### Skill 相关异常
+
+#### SkillError
+
+MASFactory Skills API 抛出的公共异常基类。
+
+#### SkillNotFoundError
+
+当目标 skill 目录不存在，或缺少必要的 `SKILL.md` 文件时抛出。
+
+#### InvalidSkillPackageError
+
+当目标路径存在，但不符合预期的 skill 包结构时抛出。
+
+#### SkillParseError
+
+当 `SKILL.md` 存在，但无法解析成合法的 skill 定义时抛出。
 
 ---
 

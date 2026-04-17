@@ -35,7 +35,8 @@ model = OpenAIModel(
     base_url=os.getenv("BASE_URL"),
 )
 
-history = HistoryMemory(top_k=12)
+instructor_history = HistoryMemory(top_k=12)
+assistant_history = HistoryMemory(top_k=12)
 
 g = RootGraph(name="p1_workflow_imp")
 
@@ -43,7 +44,7 @@ instructor = g.create_node(
     Agent,
     name="instructor",
     model=model,
-    memories=[history],
+    memories=[instructor_history],
     instructions="You are the Instructor. Read the user demand and guide the Assistant.\n",
     prompt_template="【USER DEMAND】\n{user_demand}\n\n",
 )
@@ -51,7 +52,7 @@ assistant = g.create_node(
     Agent,
     name="assistant",
     model=model,
-    memories=[history],
+    memories=[assistant_history],
     instructions="You are the Assistant. Complete the task based on user demand and Instructor guidance.\n",
     prompt_template=(
         "【USER DEMAND】\n{user_demand}\n\n"
@@ -93,7 +94,9 @@ model = OpenAIModel(
     base_url=os.getenv("BASE_URL"),
 )
 
-history = HistoryMemory(top_k=12)
+instructor_history = HistoryMemory(top_k=12)
+assistant_instructor_history = HistoryMemory(top_k=12)
+assistant_history = HistoryMemory(top_k=12)
 
 g = RootGraph(name="p2_loop_edge_imp")
 
@@ -108,7 +111,7 @@ assistant = dialog.create_node(
     Agent,
     name="assistant",
     model=model,
-    memories=[history],
+    memories=[assistant_history],
     instructions="You are the Assistant. Complete the task based on user demand and Instructor guidance.",
     prompt_template=(
         "【USER DEMAND】\n{user_demand}\n\n"
@@ -119,7 +122,7 @@ instructor = dialog.create_node(
     Agent,
     name="instructor",
     model=model,
-    memories=[history],
+    memories=[instructor_history],
     instructions="You are the Instructor. Read user demand and the previous assistant_response, then provide improvements.",
     prompt_template=[
         "【USER DEMAND】\n{user_demand}\n\n",
@@ -171,7 +174,8 @@ model = OpenAIModel(
     base_url=os.getenv("BASE_URL"),
 )
 
-history = HistoryMemory(top_k=12)
+assistant_history = HistoryMemory(top_k=12)
+instructor_history = HistoryMemory(top_k=12)
 
 g = RootGraph(
     name="p3_switch_attr_imp",
@@ -204,7 +208,7 @@ assistant = phase.create_node(
     Agent,
     name="assistant",
     model=model,
-    memories=[history],
+    memories=[assistant_history],
     instructions=(
         "You are the Assistant (CPO). Improve the draft.\n"
         "Output requirement: JSON only, MUST include draft (str)."
@@ -221,7 +225,7 @@ instructor = phase.create_node(
     Agent,
     name="instructor",
     model=model,
-    memories=[history],
+    memories=[instructor_history],
     instructions=(
         "You are the Instructor (CEO). Review the draft and produce an executable plan.\n"
         "Output requirement: JSON only, MUST include plan (str). You may also output draft (str) if needed."
@@ -299,7 +303,8 @@ class Phase(Loop):
         self._instructor_instructions = instructor_instructions
         self._assistant_instructions = assistant_instructions
         self._instructor_first = instructor_first
-        self._history = HistoryMemory(top_k=12)
+        self._instructor_history = HistoryMemory(top_k=12)
+        self._assistant_history = HistoryMemory(top_k=12)
 
     @masf_hook(Node.Hook.BUILD)
     def build(self):
@@ -320,7 +325,7 @@ class Phase(Loop):
             Agent,
             name="assistant",
             model=self._model,
-            memories=[self._history],
+            memories=[self._assistant_history],
             instructions=self._assistant_instructions,
             pull_keys=self._pull_keys,
             push_keys=self._push_keys,
@@ -329,7 +334,7 @@ class Phase(Loop):
             Agent,
             name="instructor",
             model=self._model,
-            memories=[self._history],
+            memories=[self._instructor_history],
             instructions=self._instructor_instructions,
             pull_keys=self._pull_keys,
             push_keys=self._push_keys,

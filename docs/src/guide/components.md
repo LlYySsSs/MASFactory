@@ -131,7 +131,7 @@ Standard agent node.
 Dynamic agent node.<br>
 `DynamicAgent` is similar to `Agent`, except its `instructions` are not fixed at coding time. Instead, they are read from input messages at runtime.<br>
 At runtime, `DynamicAgent` reads the field named by `instruction_key` (default: `"instructions"`) from the input payload, uses that value to override the instructions for the current execution, then removes that field from the input before continuing.
-Therefore, when using `DynamicAgent`, make sure upstream nodes or incoming edges provide that field; otherwise the current implementation raises `KeyError`.
+If the field is absent, `DynamicAgent` falls back to `default_instructions`.
 - Constructor parameters: `name`, `model`, `default_instructions`, `instruction_key`?, `prompt_template`?, `tools`?, `memories`?, `retrievers`?, `pull_keys`?, `push_keys`?, `model_settings`?, `role_name`? <br>
   - `default_instructions`: Default instructions used at initialization. In practice, runtime behavior is usually driven by the field referenced by `instruction_key`;<br>
   - `instruction_key`: Key name in the incoming message used to dynamically override instructions. Default is `"instructions"`; if this key exists in the input, its value is used as the instructions for the current execution;<br>

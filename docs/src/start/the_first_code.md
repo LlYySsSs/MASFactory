@@ -32,7 +32,7 @@ We build a simple QA workflow with two agents: one for analysis and one for answ
 />
 
 ```python
-from masfactory import RootGraph, Agent, OpenAIModel, NodeTemplate, HistoryMemory
+from masfactory import RootGraph, Agent, OpenAIModel, NodeTemplate, HistoryMemory, Shared, Factory
 
 model = OpenAIModel(
     api_key="YOUR_API_KEY",
@@ -40,8 +40,11 @@ model = OpenAIModel(
     model_name="gpt-4o-mini",
 )
 
-history = HistoryMemory(top_k=12)
-BaseAgent = NodeTemplate(Agent, model=model, memories=[history])
+BaseAgent = NodeTemplate(
+    Agent,
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
+)
 
 g = RootGraph(
     name="qa_two_stage",
@@ -80,6 +83,10 @@ model = OpenAIModel(
 ::: tip Why doesn’t an Agent read `attributes` by default?
 `Agent.pull_keys / Agent.push_keys` defaults to `{}`. With this setting, an agent does not read from or write back to graph attributes.  
 If you want an agent to read from attributes, explicitly set `pull_keys` to the required fields. If you set `pull_keys=None`, it will inherit all attributes.
+:::
+
+::: info Want reusable capability packs?
+If you want to reuse Anthropic-style `SKILL.md` capability packages across agents, see: [Skills](/guide/skills).
 :::
 
 ---

@@ -29,7 +29,7 @@ In this structure, `Assistant` produces a draft/result, and `Instructor` provide
 
 ```python
 import os
-from masfactory import RootGraph, Agent, OpenAIModel, NodeTemplate, HistoryMemory
+from masfactory import RootGraph, Agent, OpenAIModel, NodeTemplate, HistoryMemory, Shared, Factory
 
 # 1) Model adapter (OpenAI API as an example)
 model = OpenAIModel(
@@ -38,20 +38,19 @@ model = OpenAIModel(
     base_url=os.getenv("BASE_URL"),
 )
 
-history = HistoryMemory(top_k=12)
 
 # 2) Declare two node templates (NodeTemplate)
 Instructor = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions="You are the Instructor. Read the user demand and guide the Assistant.\n",
     prompt_template="【USER DEMAND】\n{user_demand}\n\n",
 )
 Assistant = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions="You are the Assistant. Complete the task based on user demand and Instructor guidance.\n",
     prompt_template=(
         "【USER DEMAND】\n{user_demand}\n\n"
@@ -98,7 +97,7 @@ Here we introduce `Loop` and place the `Instructor → Assistant` link inside th
 
 ```python
 import os
-from masfactory import RootGraph, Loop, Agent, OpenAIModel, NodeTemplate, HistoryMemory
+from masfactory import RootGraph, Loop, Agent, OpenAIModel, NodeTemplate, HistoryMemory, Shared, Factory
 
 model = OpenAIModel(
     model_name=os.getenv("MODEL", "gpt-4o-mini"),
@@ -106,12 +105,11 @@ model = OpenAIModel(
     base_url=os.getenv("BASE_URL"),
 )
 
-history = HistoryMemory(top_k=12)
 
 Instructor = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions=(
         "You are the Instructor. Read the user demand and the previous assistant_response, then provide improvements.\n"
     ),
@@ -122,8 +120,8 @@ Instructor = NodeTemplate(
 )
 Assistant = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions="You are the Assistant. Complete the task based on user demand and Instructor guidance.\n",
     prompt_template=(
         "【USER DEMAND】\n{user_demand}\n\n"
@@ -185,7 +183,7 @@ To support configurable “who speaks first”, and to reduce edge field-wiring 
 
 ```python
 import os
-from masfactory import RootGraph, Loop, LogicSwitch, Agent, OpenAIModel, NodeTemplate, HistoryMemory
+from masfactory import RootGraph, Loop, LogicSwitch, Agent, OpenAIModel, NodeTemplate, HistoryMemory, Shared, Factory
 
 model = OpenAIModel(
     model_name=os.getenv("MODEL", "gpt-4o-mini"),
@@ -193,7 +191,6 @@ model = OpenAIModel(
     base_url=os.getenv("BASE_URL"),
 )
 
-history = HistoryMemory(top_k=12)
 
 assistant_first = True  # a hyperparameter to decide speaking order
 
@@ -213,8 +210,8 @@ Switch = NodeTemplate(LogicSwitch, routes={"assistant": to_assistant, "instructo
 
 Assistant = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions="You are the Assistant (CPO). Improve the draft.\n",
     prompt_template=[
         "【Task】\n{task}\n\n",
@@ -225,8 +222,8 @@ Assistant = NodeTemplate(
 )
 Instructor = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions="You are the Instructor (CEO). Review the draft and produce an executable plan.\n",
     prompt_template=[
         "【Task】\n{task}\n\n",
@@ -283,7 +280,7 @@ Here we introduce `phase_instructions`, and we synchronize explicit phase state 
 
 ```python
 import os
-from masfactory import Loop, LogicSwitch, Agent, OpenAIModel, NodeTemplate, HistoryMemory
+from masfactory import Loop, LogicSwitch, Agent, OpenAIModel, NodeTemplate, HistoryMemory, Shared, Factory
 
 model = OpenAIModel(
     model_name=os.getenv("MODEL", "gpt-4o-mini"),
@@ -291,7 +288,6 @@ model = OpenAIModel(
     base_url=os.getenv("BASE_URL"),
 )
 
-history = HistoryMemory(top_k=12)
 
 assistant_first = True
 
@@ -306,8 +302,8 @@ Switch = NodeTemplate(LogicSwitch, routes={"assistant": to_assistant, "instructo
 
 Assistant = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions="You are the Assistant (CPO). Update the draft. Output JSON with only fields that should be updated.",
     prompt_template=[
         "【Phase goal】\n{phase_instructions}\n",
@@ -320,8 +316,8 @@ Assistant = NodeTemplate(
 )
 Instructor = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions="You are the Instructor (CEO). Update the plan. Output JSON with only fields that should be updated.",
     prompt_template=[
         "【Phase goal】\n{phase_instructions}\n",
@@ -439,6 +435,8 @@ from masfactory import (
     OpenAIModel,
     NodeTemplate,
     HistoryMemory,
+    Shared,
+    Factory,
     template_overrides_for,
 )
 
@@ -448,7 +446,6 @@ model = OpenAIModel(
     base_url=os.getenv("BASE_URL"),
 )
 
-history = HistoryMemory(top_k=12)
 
 # 1) Load ChatDev Lite prompt configs (from this repo)
 CONFIG_DIR = Path("applications/chatdev_lite/assets/config")
@@ -524,8 +521,8 @@ Switch = NodeTemplate(LogicSwitch, routes={"assistant": to_assistant, "instructo
 
 Assistant = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions="",
     prompt_template=[
         "{chatdev_prompt}\n\n",
@@ -538,8 +535,8 @@ Assistant = NodeTemplate(
 )
 Instructor = NodeTemplate(
     Agent,
-    model=model,
-    memories=[history],
+    model=Shared(model),
+    memories=[Factory(lambda: HistoryMemory(top_k=12))],
     instructions="",
     prompt_template=[
         "{chatdev_prompt}\n\n",

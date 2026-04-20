@@ -37,16 +37,34 @@ def compile_document_to_graph(
 
     model = build_model(api_key=api_key, model_name=model_name, base_url=base_url)
     warnings = CompileWarnings()
+    shared_agent_context = _shared_agent_context(document)
     graph = RootGraph(name=_safe_graph_name(document.name), attributes=dict(document.attributes))
+
+    if shared_agent_context["tools"]:
+        warnings.add(
+            f"skill manifest defines {len(shared_agent_context['tools'])} tool entries, but manifest-level tool binding is metadata-only in the MVP"
+        )
 
     runtime_nodes: dict[str, Any] = {}
     for node in document.nodes:
         if node.type == "agent":
-            runtime_nodes[node.id] = _create_agent_node(graph, node, warnings, model)
+            runtime_nodes[node.id] = _create_agent_node(
+                graph,
+                node,
+                warnings,
+                model,
+                shared_agent_context=shared_agent_context,
+            )
         elif node.type == "custom":
             runtime_nodes[node.id] = _create_custom_node(graph, node, warnings)
         elif node.type == "loop":
-            runtime_nodes[node.id] = _create_loop_node(graph, node, warnings, model)
+            runtime_nodes[node.id] = _create_loop_node(
+                graph,
+                node,
+                warnings,
+                model,
+                shared_agent_context=shared_agent_context,
+            )
 
     for edge in document.edges:
         source_node = _find_node(document, edge.source)
@@ -66,7 +84,7 @@ def compile_document_to_graph(
     return graph, warnings
 
 
-def _create_agent_node(graph, node: CanvasNode, warnings: CompileWarnings, model):
+def _create_agent_node(graph, node: CanvasNode, warnings: CompileWarnings, model, *, shared_agent_context: dict[str, Any]):
     from masfactory.components.agents.agent import Agent
 
     config = dict(node.config)
@@ -76,7 +94,7 @@ def _create_agent_node(graph, node: CanvasNode, warnings: CompileWarnings, model
             f"node '{node.id}' defines {len(tools)} tool entries, but tool binding is metadata-only in the MVP"
         )
 
-    instructions = _compose_agent_instructions(config)
+    instructions = _compose_agent_instructions(config, shared_agent_context=shared_agent_context)
     prompt_template = str(config.get("prompt_template") or "{message}")
     pull_keys = _normalize_keys(config.get("pull_keys")) or {}
     push_keys = _normalize_keys(config.get("push_keys")) or {}
@@ -117,7 +135,7 @@ def _create_custom_node(graph, node: CanvasNode, warnings: CompileWarnings):
     )
 
 
-def _create_loop_node(graph, node: CanvasNode, warnings: CompileWarnings, model):
+def _create_loop_node(graph, node: CanvasNode, warnings: CompileWarnings, model, *, shared_agent_context: dict[str, Any]):
     from masfactory.components.graphs.loop import Loop
 
     config = dict(node.config)
@@ -142,7 +160,16 @@ def _create_loop_node(graph, node: CanvasNode, warnings: CompileWarnings, model)
     output_mapping = _normalize_keys(body.get("output_mapping")) or _normalize_keys(body.get("push_keys")) or {"message": "Loop output"}
 
     if body_type == "agent":
-        body_node = _create_loop_body_agent(loop, node.id, body, warnings, model, input_mapping, output_mapping)
+        body_node = _create_loop_body_agent(
+            loop,
+            node.id,
+            body,
+            warnings,
+            model,
+            input_mapping,
+            output_mapping,
+            shared_agent_context=shared_agent_context,
+        )
     elif body_type == "custom":
         body_node = _create_loop_body_custom(loop, node.id, body, warnings, input_mapping, output_mapping)
     else:
@@ -153,7 +180,7 @@ def _create_loop_node(graph, node: CanvasNode, warnings: CompileWarnings, model)
     return loop
 
 
-def _create_loop_body_agent(loop, node_id: str, body: dict[str, Any], warnings: CompileWarnings, model, input_mapping: dict[str, str], output_mapping: dict[str, str]):
+def _create_loop_body_agent(loop, node_id: str, body: dict[str, Any], warnings: CompileWarnings, model, input_mapping: dict[str, str], output_mapping: dict[str, str], *, shared_agent_context: dict[str, Any]):
     from masfactory.components.agents.agent import Agent
 
     tools = list(body.get("tools") or [])
@@ -162,7 +189,7 @@ def _create_loop_body_agent(loop, node_id: str, body: dict[str, Any], warnings: 
             f"loop '{node_id}' body defines {len(tools)} tool entries, but tool binding is metadata-only in the MVP"
         )
 
-    instructions = _compose_agent_instructions(body)
+    instructions = _compose_agent_instructions(body, shared_agent_context=shared_agent_context)
     prompt_template = str(body.get("prompt_template") or "{message}")
     pull_keys = _normalize_keys(body.get("pull_keys")) or input_mapping
     push_keys = _normalize_keys(body.get("push_keys")) or output_mapping
@@ -200,10 +227,18 @@ def _create_loop_body_custom(loop, node_id: str, body: dict[str, Any], warnings:
     )
 
 
-def _compose_agent_instructions(config: dict[str, Any]) -> str:
+def _compose_agent_instructions(config: dict[str, Any], *, shared_agent_context: dict[str, Any] | None = None) -> str:
     base = str(config.get("instructions") or "").strip()
     behavior_rules = [str(item).strip() for item in (config.get("behavior_rules") or []) if str(item).strip()]
     knowledge_items = []
+    shared_agent_context = shared_agent_context or {}
+    shared_style = str(shared_agent_context.get("style") or "").strip()
+    shared_knowledge_items = _normalize_knowledge_items(shared_agent_context.get("knowledge") or [])
+    shared_behavior_rules = [
+        str(item).strip()
+        for item in (shared_agent_context.get("behavior_rules") or [])
+        if str(item).strip()
+    ]
     for item in (config.get("knowledge") or []):
         if isinstance(item, dict):
             title = str(item.get("title") or "Knowledge").strip()
@@ -214,11 +249,44 @@ def _compose_agent_instructions(config: dict[str, Any]) -> str:
             knowledge_items.append(item.strip())
 
     sections = [base] if base else []
+    if shared_style:
+        sections.append(f"Skill-wide style: {shared_style}")
+    if shared_knowledge_items:
+        sections.append("Skill-wide knowledge:\n- " + "\n- ".join(shared_knowledge_items))
     if knowledge_items:
-        sections.append("Domain knowledge:\n- " + "\n- ".join(knowledge_items))
+        sections.append("Node-specific knowledge:\n- " + "\n- ".join(knowledge_items))
+    if shared_behavior_rules:
+        sections.append("Skill-wide behavior rules:\n- " + "\n- ".join(shared_behavior_rules))
     if behavior_rules:
-        sections.append("Behavior rules:\n- " + "\n- ".join(behavior_rules))
+        sections.append("Node-specific behavior rules:\n- " + "\n- ".join(behavior_rules))
     return "\n\n".join(section for section in sections if section).strip()
+
+
+def _normalize_knowledge_items(items: list[Any]) -> list[str]:
+    normalized: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            title = str(item.get("title") or "Knowledge").strip()
+            text = str(item.get("text") or "").strip()
+            if text:
+                normalized.append(f"{title}: {text}")
+        elif isinstance(item, str) and item.strip():
+            normalized.append(item.strip())
+    return normalized
+
+
+def _shared_agent_context(document: CanvasDocument) -> dict[str, Any]:
+    behavior = dict(document.manifest.behavior or {})
+    return {
+        "style": str(behavior.get("style") or "").strip(),
+        "behavior_rules": [
+            str(item).strip()
+            for item in (behavior.get("rules") or [])
+            if str(item).strip()
+        ],
+        "knowledge": list(document.manifest.knowledge or []),
+        "tools": list(document.manifest.tools or []),
+    }
 
 
 def _build_custom_forward(node_id: str, mode: str, config: dict[str, Any], warnings: CompileWarnings):

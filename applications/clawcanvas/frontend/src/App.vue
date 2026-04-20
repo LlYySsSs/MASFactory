@@ -1,13 +1,15 @@
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import CanvasBoard from './components/CanvasBoard.vue';
 import InspectorPanel from './components/InspectorPanel.vue';
+import MapEditor from './components/MapEditor.vue';
 import { buildNodeTemplate, createDemoDocument, nextNodeId } from './composables/useClawCanvas';
 
 const API_ROOT = 'http://127.0.0.1:5000/api';
 
 const documentRef = ref(createDemoDocument());
 const selectedNodeId = ref('');
+const selectedEdgeId = ref('');
 const apiKey = ref('');
 const baseUrl = ref('');
 const modelName = ref('gpt-4o-mini');
@@ -19,6 +21,14 @@ const warnings = ref([]);
 const selectedNode = computed(() =>
   documentRef.value.nodes.find((node) => node.id === selectedNodeId.value) || null
 );
+
+const nodesById = computed(() => {
+  const map = new Map();
+  for (const node of documentRef.value.nodes) {
+    map.set(node.id, node);
+  }
+  return map;
+});
 
 function addNode(type) {
   const id = nextNodeId(documentRef.value, type);
@@ -35,6 +45,7 @@ function addNode(type) {
 function resetDemo() {
   documentRef.value = createDemoDocument();
   selectedNodeId.value = '';
+  selectedEdgeId.value = '';
   validationSummary.value = null;
   runResult.value = null;
   warnings.value = [];
@@ -43,6 +54,12 @@ function resetDemo() {
 
 function selectNode(nodeId) {
   selectedNodeId.value = nodeId;
+  selectedEdgeId.value = '';
+}
+
+function selectEdge(edgeId) {
+  selectedEdgeId.value = edgeId;
+  selectedNodeId.value = '';
 }
 
 function moveNode({ id, position }) {
@@ -96,6 +113,13 @@ function updateNode({ id, patch }) {
   };
 }
 
+function renameNode({ id, label }) {
+  const node = documentRef.value.nodes.find((item) => item.id === id);
+  if (!node) return;
+  node.label = label;
+  statusText.value = `Renamed ${id} to ${label}`;
+}
+
 function updateManifest(patch) {
   documentRef.value.manifest = {
     ...documentRef.value.manifest,
@@ -111,17 +135,104 @@ function deleteNode(nodeId) {
   if (selectedNodeId.value === nodeId) {
     selectedNodeId.value = '';
   }
+  if (selectedEdgeId.value) {
+    const edgeStillExists = documentRef.value.edges.some((edge) => edge.id === selectedEdgeId.value);
+    if (!edgeStillExists) selectedEdgeId.value = '';
+  }
   statusText.value = `Deleted node ${nodeId}`;
 }
 
-function updateEdgeMapping(edgeId, raw) {
+function deleteEdge(edgeId) {
+  documentRef.value.edges = documentRef.value.edges.filter((edge) => edge.id !== edgeId);
+  if (selectedEdgeId.value === edgeId) {
+    selectedEdgeId.value = '';
+  }
+  statusText.value = `Deleted edge ${edgeId}`;
+}
+
+function onGlobalKeyDown(event) {
+  const target = event.target;
+  const tagName = target?.tagName?.toLowerCase?.() || '';
+  const isEditable =
+    tagName === 'input' ||
+    tagName === 'textarea' ||
+    Boolean(target?.isContentEditable);
+  if (isEditable) return;
+
+  if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+
+  if (selectedEdgeId.value) {
+    event.preventDefault();
+    deleteEdge(selectedEdgeId.value);
+    return;
+  }
+
+  if (selectedNodeId.value) {
+    const node = documentRef.value.nodes.find((item) => item.id === selectedNodeId.value);
+    if (!node || node.type === 'start' || node.type === 'end') return;
+    event.preventDefault();
+    deleteNode(selectedNodeId.value);
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onGlobalKeyDown);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onGlobalKeyDown);
+});
+
+function updateEdgeMapping(edgeId, mapping) {
   const edge = documentRef.value.edges.find((item) => item.id === edgeId);
   if (!edge) return;
-  try {
-    edge.mapping = raw ? JSON.parse(raw) : {};
-  } catch {
-    statusText.value = `Invalid JSON mapping for ${edgeId}`;
+  edge.mapping = mapping;
+}
+
+function mappingSuggestionsForEdge(edge) {
+  const sourceNode = nodesById.value.get(edge.source);
+  const targetNode = nodesById.value.get(edge.target);
+  const suggestions = new Map();
+
+  for (const [key, value] of Object.entries(readNodeOutputKeys(sourceNode))) {
+    suggestions.set(key, { key, value: String(value ?? '') });
   }
+
+  for (const [key, value] of Object.entries(readNodeInputKeys(targetNode))) {
+    if (!suggestions.has(key)) {
+      suggestions.set(key, { key, value: String(value ?? '') });
+    }
+  }
+
+  return [...suggestions.values()];
+}
+
+function readNodeInputKeys(node) {
+  if (!node) return {};
+  if (node.type === 'agent' || node.type === 'custom') return node.config.pull_keys || {};
+  if (node.type === 'loop') {
+    return (
+      node.config.pull_keys ||
+      node.config.body?.input_mapping ||
+      node.config.body?.pull_keys ||
+      {}
+    );
+  }
+  return {};
+}
+
+function readNodeOutputKeys(node) {
+  if (!node) return {};
+  if (node.type === 'agent' || node.type === 'custom') return node.config.push_keys || {};
+  if (node.type === 'loop') {
+    return (
+      node.config.push_keys ||
+      node.config.body?.output_mapping ||
+      node.config.body?.push_keys ||
+      {}
+    );
+  }
+  return {};
 }
 
 async function fetchApi(path, payload) {
@@ -237,12 +348,19 @@ async function loadDemoFromBackend() {
 
       <section class="tool-group">
         <div class="group-title">Edges</div>
-        <div class="helper-text">Drag from a node's right handle to another node's left handle to connect them.</div>
+        <div class="helper-text">Click one node handle, then click a compatible handle on another node to connect them.</div>
         <div v-for="edge in documentRef.edges" :key="edge.id" class="edge-card">
           <div class="edge-title">{{ edge.source }} -> {{ edge.target }}</div>
-          <textarea
-            :value="JSON.stringify(edge.mapping, null, 2)"
-            @input="updateEdgeMapping(edge.id, $event.target.value)"
+          <MapEditor
+            :value="edge.mapping"
+            key-label="Edge Key"
+            value-label="Meaning"
+            key-placeholder="message"
+            value-placeholder="What this field carries"
+            help="Edge mapping says which fields move across this connection."
+            :suggestions="mappingSuggestionsForEdge(edge)"
+            suggestion-title="From Connected Nodes"
+            @update:value="updateEdgeMapping(edge.id, $event)"
           />
         </div>
       </section>
@@ -265,9 +383,12 @@ async function loadDemoFromBackend() {
         :nodes="documentRef.nodes"
         :edges="documentRef.edges"
         :selected-node-id="selectedNodeId"
+        :selected-edge-id="selectedEdgeId"
         @select-node="selectNode"
+        @select-edge="selectEdge"
         @move-node="moveNode"
         @create-edge="createEdge"
+        @rename-node="renameNode"
         @status="statusText = $event"
       />
 
@@ -291,6 +412,7 @@ async function loadDemoFromBackend() {
       <InspectorPanel
         :selected-node="selectedNode"
         :manifest="documentRef.manifest"
+        :document="documentRef"
         @update-node="updateNode"
         @update-manifest="updateManifest"
         @delete-node="deleteNode"

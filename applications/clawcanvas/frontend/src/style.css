@@ -175,6 +175,27 @@ label {
   line-height: 1.5;
 }
 
+.warning-block {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(139, 40, 70, 0.08);
+  border: 1px solid rgba(139, 40, 70, 0.18);
+}
+
+.warning-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8b2846;
+}
+
+.warning-text {
+  color: #7a2842;
+}
+
 .edge-card {
   display: grid;
   gap: 8px;
@@ -325,6 +346,12 @@ label {
   margin-top: 4px;
   font-size: 12px;
   opacity: 0.84;
+}
+
+.loop-open-button {
+  margin-top: 10px;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
 }
 
 .node-label-input {
@@ -497,6 +524,76 @@ label {
   line-height: 1.45;
 }
 
+.loop-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(18, 32, 51, 0.42);
+  backdrop-filter: blur(8px);
+}
+
+.loop-modal-shell {
+  width: min(1500px, calc(100vw - 40px));
+  height: min(900px, calc(100vh - 40px));
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 28px;
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow: var(--shadow);
+}
+
+.loop-modal-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.loop-modal-header h2 {
+  margin: 6px 0 8px;
+}
+
+.loop-modal-header p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.loop-modal-grid {
+  display: grid;
+  grid-template-columns: 380px minmax(0, 1fr);
+  gap: 14px;
+  min-height: 0;
+}
+
+.loop-modal-sidebar {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+  padding-right: 4px;
+}
+
+.loop-modal-main {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+}
+
+.loop-modal-main .canvas-viewport {
+  min-height: 100%;
+}
+
+.loop-panel-scroll {
+  min-height: 0;
+}
+
 .inspector-panel {
   border-radius: 22px;
   overflow: auto;
@@ -510,6 +607,10 @@ label {
   }
 
   .console-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .loop-modal-grid {
     grid-template-columns: 1fr;
   }
 

@@ -43,10 +43,10 @@ Current runtime constraints:
 
 - graph must be a DAG
 - exactly one `start` and one `end`
-- tool execution is metadata-only in this MVP
+- supported tool execution is runtime-bound for `builtin` tools and configured `api` tools; `mcp` entries still need an external connector layer
 - knowledge and behavior rules are compiled into agent prompt context, not yet into dedicated retrievers or MCP-backed tools
 - `custom` nodes currently support built-in transform modes: `passthrough`, `template`, `set`, `pick`
-- `loop` nodes are compiled into MASFactory `Loop` nodes with one configured body node in this MVP
+- `loop` nodes are compiled into subgraph-based MASFactory `Loop` nodes with explicit controller inputs and controller outputs
 
 ## Backend
 

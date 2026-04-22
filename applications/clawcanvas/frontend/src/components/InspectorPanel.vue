@@ -8,13 +8,14 @@ import StringListEditor from './StringListEditor.vue';
 const props = defineProps({
   selectedNode: { type: Object, default: null },
   manifest: { type: Object, required: true },
-  document: { type: Object, required: true }
+  document: { type: Object, required: true },
+  keyPool: { type: Object, required: true }
 });
 
-const emit = defineEmits(['update-node', 'update-manifest', 'delete-node']);
+const emit = defineEmits(['update-node', 'update-manifest', 'delete-node', 'open-loop-editor']);
 
 const toolFields = [
-  { key: 'name', label: 'Name', placeholder: 'web_search' },
+  { key: 'name', label: 'Name', placeholder: 'echo / json_inspect / http_api' },
   {
     key: 'binding',
     label: 'Binding',
@@ -24,7 +25,7 @@ const toolFields = [
       { value: 'api', label: 'api' },
       { value: 'other', label: 'other' }
     ],
-    help: 'Binding means how this tool is connected at runtime. mcp = MASFactory/MCP tool, builtin = built into the runtime or app, api = external HTTP/API service, other = reserved custom integration.'
+    help: 'Binding means how this tool is connected at runtime. builtin and api are wired by the current backend. mcp still needs an external endpoint/config layer before it can run.'
   },
   { key: 'description', label: 'Description', placeholder: 'What this tool does', multiline: true }
 ];
@@ -50,19 +51,28 @@ const nodeBehaviorRuleSuggestions = [
 ];
 const toolPresets = [
   {
-    label: 'Web Search',
-    description: 'Search the web for supporting information',
-    item: { name: 'web_search', binding: 'mcp', description: 'Searches the web for supporting evidence.' }
+    label: 'Echo',
+    description: 'Return text unchanged',
+    item: { name: 'echo', binding: 'builtin', description: 'Echo input text for quick debugging or prompt chaining.' }
+  },
+  {
+    label: 'JSON Inspect',
+    description: 'Pretty-print payload as JSON',
+    item: { name: 'json_inspect', binding: 'builtin', description: 'Render payload as formatted JSON for inspection.' }
+  },
+  {
+    label: 'List Keys',
+    description: 'List top-level keys from an object payload',
+    item: { name: 'list_keys', binding: 'builtin', description: 'Return the top-level keys of a dict-like payload.' }
   },
   {
     label: 'HTTP API',
     description: 'Call an external API service',
-    item: { name: 'http_api', binding: 'api', description: 'Calls an external HTTP API.' }
-  },
-  {
-    label: 'Retriever',
-    description: 'Lookup internal documents or vector data',
-    item: { name: 'retriever', binding: 'builtin', description: 'Retrieves internal reference material.' }
+    item: {
+      name: 'http_api',
+      binding: 'api',
+      description: 'method=POST; url=https://example.com/endpoint; body={\"query\":\"{query}\"}; response=json'
+    }
   }
 ];
 const knowledgePresets = [
@@ -171,6 +181,8 @@ function mappingSuggestions(mapping) {
   }));
 }
 
+const globalKeySuggestions = computed(() => mappingSuggestions(props.keyPool?.key_map || {}));
+
 function incomingEdges(nodeId) {
   return (props.document?.edges || []).filter((edge) => edge.target === nodeId);
 }
@@ -190,7 +202,7 @@ const selectedOutgoingSuggestions = computed(() => {
 });
 
 const agentPullSuggestions = computed(() =>
-  mergeSuggestions(selectedIncomingSuggestions.value, [
+  mergeSuggestions(globalKeySuggestions.value, selectedIncomingSuggestions.value, [
     { key: 'query', value: 'Original user request' },
     { key: 'message', value: 'Input message' },
     { key: 'context', value: 'Relevant context' }
@@ -198,7 +210,7 @@ const agentPullSuggestions = computed(() =>
 );
 
 const agentPushSuggestions = computed(() =>
-  mergeSuggestions(selectedOutgoingSuggestions.value, [
+  mergeSuggestions(globalKeySuggestions.value, selectedOutgoingSuggestions.value, [
     { key: 'answer', value: 'Main answer' },
     { key: 'analysis', value: 'Structured analysis' },
     { key: 'summary', value: 'Short summary' }
@@ -206,7 +218,7 @@ const agentPushSuggestions = computed(() =>
 );
 
 const customPullSuggestions = computed(() =>
-  mergeSuggestions(selectedIncomingSuggestions.value, [
+  mergeSuggestions(globalKeySuggestions.value, selectedIncomingSuggestions.value, [
     { key: 'message', value: 'Input message' },
     { key: 'analysis', value: 'Structured analysis' },
     { key: 'context', value: 'Additional context' }
@@ -214,7 +226,7 @@ const customPullSuggestions = computed(() =>
 );
 
 const customPushSuggestions = computed(() =>
-  mergeSuggestions(selectedOutgoingSuggestions.value, [
+  mergeSuggestions(globalKeySuggestions.value, selectedOutgoingSuggestions.value, [
     { key: 'message', value: 'Output message' },
     { key: 'result', value: 'Transformed result' },
     { key: 'summary', value: 'Formatted summary' }
@@ -222,14 +234,14 @@ const customPushSuggestions = computed(() =>
 );
 
 const loopInputSuggestions = computed(() =>
-  mergeSuggestions(selectedIncomingSuggestions.value, [
+  mergeSuggestions(globalKeySuggestions.value, selectedIncomingSuggestions.value, [
     { key: 'message', value: 'Loop input' },
     { key: 'query', value: 'Task to iterate on' }
   ])
 );
 
 const loopOutputSuggestions = computed(() =>
-  mergeSuggestions(selectedOutgoingSuggestions.value, [
+  mergeSuggestions(globalKeySuggestions.value, selectedOutgoingSuggestions.value, [
     { key: 'message', value: 'Loop output' },
     { key: 'done', value: 'Stop flag' },
     { key: 'result', value: 'Final result' }
@@ -246,9 +258,50 @@ const loopBodyInputSuggestions = computed(() =>
 
 const loopBodyOutputSuggestions = computed(() =>
   mergeSuggestions(
+    globalKeySuggestions.value,
     mappingSuggestions(props.selectedNode?.config?.body?.output_mapping || {}),
     mappingSuggestions(props.selectedNode?.config?.push_keys || {}),
     loopOutputSuggestions.value
+  )
+);
+
+const incomingKeyNames = computed(() => selectedIncomingSuggestions.value.map((item) => item.key));
+const outgoingKeyNames = computed(() => selectedOutgoingSuggestions.value.map((item) => item.key));
+
+function extractPlaceholders(text) {
+  const matches = String(text || '').match(/\{([^{}]+)\}/g) || [];
+  return [...new Set(matches.map((item) => item.slice(1, -1).trim()).filter(Boolean))];
+}
+
+function promptWarnings(promptTemplate, allowedKeys, globalKeys, scopeLabel) {
+  const allowed = new Set(Object.keys(allowedKeys || {}));
+  const global = new Set((globalKeys || []).map((item) => String(item)));
+  return extractPlaceholders(promptTemplate).map((key) => {
+    if (allowed.has(key)) {
+      return null;
+    }
+    if (global.has(key)) {
+      return `${scopeLabel}: {${key}} is in workflow key pool but missing from pull_keys.`;
+    }
+    return `${scopeLabel}: {${key}} cannot be found in pull_keys or workflow key pool.`;
+  }).filter(Boolean);
+}
+
+const agentPromptWarnings = computed(() =>
+  promptWarnings(
+    props.selectedNode?.config?.prompt_template || '',
+    props.selectedNode?.config?.pull_keys || {},
+    props.keyPool?.key_names || [],
+    'Prompt template'
+  )
+);
+
+const loopBodyPromptWarnings = computed(() =>
+  promptWarnings(
+    props.selectedNode?.config?.body?.prompt_template || '',
+    props.selectedNode?.config?.body?.pull_keys || props.selectedNode?.config?.body?.input_mapping || {},
+    props.keyPool?.key_names || [],
+    'Loop body prompt template'
   )
 );
 </script>
@@ -285,13 +338,13 @@ const loopBodyOutputSuggestions = computed(() =>
 
       <div class="subsection-title">Tools</div>
       <div class="field-help">
-        Skill-level tools describe capabilities the whole skill depends on. In the current MVP they are exported as manifest metadata. Runtime auto-binding is not finished yet, so use `binding` mainly as declaration.
+        Skill-level tools are shared into every compiled agent node. The backend currently runtime-binds <code>builtin</code> tools and generic <code>api</code> tools; <code>mcp</code> entries are still declarations until an MCP endpoint/config layer is added.
       </div>
       <ObjectListEditor
         :value="manifest.tools || []"
         :fields="toolFields"
         :create-item="createToolItem"
-        help="Declare which tools this skill depends on. Name is the tool id, binding describes the source, description explains when it is used."
+        help="Declare which tools this skill depends on. Name is the tool id, binding describes the source, and description explains when it is used. For api tools, put config like method/url/body in the description."
         :presets="toolPresets"
         preset-title="Quick Add Tools"
         @update:value="updateManifest('tools', $event)"
@@ -357,6 +410,12 @@ const loopBodyOutputSuggestions = computed(() =>
           <div class="field-help">
             Prompt template is plain text with placeholders like <code>{query}</code> and <code>{analysis}</code>. Placeholders should come from this node's <code>pull_keys</code>.
           </div>
+          <div v-if="agentPromptWarnings.length" class="warning-block">
+            <div class="warning-title">Prompt Warnings</div>
+            <div v-for="warning in agentPromptWarnings" :key="warning" class="field-help warning-text">
+              {{ warning }}
+            </div>
+          </div>
 
           <div class="subsection-title">Pull Keys</div>
           <MapEditor
@@ -367,10 +426,14 @@ const loopBodyOutputSuggestions = computed(() =>
             value-placeholder="Original user request"
             help="Pull keys tell this node what fields it expects to read."
             :suggestions="agentPullSuggestions"
-            suggestion-title="From Incoming Edges"
+            suggestion-title="Workflow Key Pool"
             @update:value="updateNodeConfig('pull_keys', $event)"
           />
           <div class="field-help">{{ keyRuleHelp }}</div>
+          <div class="field-help">Incoming edge keys are recommendations, not the full definition. MASFactory semantics treat pull_keys as reads from the workflow-level outer attribute scope.</div>
+          <div v-if="incomingKeyNames.length" class="field-help">
+            Upstream reachable keys for this node: <code>{{ incomingKeyNames.join(', ') }}</code>
+          </div>
 
           <div class="subsection-title">Push Keys</div>
           <MapEditor
@@ -381,11 +444,14 @@ const loopBodyOutputSuggestions = computed(() =>
             value-placeholder="Structured task analysis"
             help="Push keys tell this node what fields it writes back for downstream nodes."
             :suggestions="agentPushSuggestions"
-            suggestion-title="For Downstream Nodes"
+            suggestion-title="Workflow Key Pool"
             @update:value="updateNodeConfig('push_keys', $event)"
           />
           <div class="field-help">
             Pull keys and push keys do not need to be identical. A node may read <code>query</code> and write <code>analysis</code>; the edge mapping is what connects upstream outputs to downstream inputs.
+          </div>
+          <div v-if="outgoingKeyNames.length" class="field-help">
+            Downstream edges currently reference: <code>{{ outgoingKeyNames.join(', ') }}</code>
           </div>
 
           <div class="subsection-title">Behavior Rules</div>
@@ -420,13 +486,13 @@ const loopBodyOutputSuggestions = computed(() =>
             :value="selectedNode.config.tools || []"
             :fields="toolFields"
             :create-item="createToolItem"
-            help="Node-level tools are only declared for this node."
+            help="Node-level tools only apply to this node. builtin and api bindings are runtime-wired by the backend."
             :presets="toolPresets"
             preset-title="Quick Add Tools"
             @update:value="updateNodeConfig('tools', $event)"
           />
           <div class="field-help">
-            Use node-level tools when a capability belongs to one node only. In the current MVP, tool declarations are metadata and export information; automatic runtime tool wiring is not complete yet.
+            Use node-level tools when a capability belongs to one node only. builtin tools are attached as MASFactory callables, api tools become generic HTTP callables, and mcp entries remain pending external connector support.
           </div>
         </template>
 
@@ -458,7 +524,7 @@ const loopBodyOutputSuggestions = computed(() =>
             value-placeholder="Summary: {analysis}"
             help="Used in template mode. Values may reference input fields with {field_name}."
             :suggestions="customPushSuggestions"
-            suggestion-title="Suggested Outputs"
+            suggestion-title="Workflow Key Pool"
             @update:value="updateNodeConfig('templates', $event)"
           />
 
@@ -472,7 +538,7 @@ const loopBodyOutputSuggestions = computed(() =>
             value-placeholder="ok"
             help="Used in set mode. Every row becomes a fixed output field."
             :suggestions="customPushSuggestions"
-            suggestion-title="Suggested Outputs"
+            suggestion-title="Workflow Key Pool"
             @update:value="updateNodeConfig('static_outputs', $event)"
           />
 
@@ -499,10 +565,13 @@ const loopBodyOutputSuggestions = computed(() =>
             key-placeholder="analysis"
             value-placeholder="Structured workflow analysis"
             :suggestions="customPullSuggestions"
-            suggestion-title="From Incoming Edges"
+            suggestion-title="Workflow Key Pool"
             @update:value="updateNodeConfig('pull_keys', $event)"
           />
           <div class="field-help">{{ keyRuleHelp }}</div>
+          <div v-if="incomingKeyNames.length" class="field-help">
+            Upstream reachable keys for this node: <code>{{ incomingKeyNames.join(', ') }}</code>
+          </div>
 
           <div class="subsection-title">Push Keys</div>
           <MapEditor
@@ -512,11 +581,14 @@ const loopBodyOutputSuggestions = computed(() =>
             key-placeholder="analysis_card"
             value-placeholder="Formatted analysis card"
             :suggestions="customPushSuggestions"
-            suggestion-title="For Downstream Nodes"
+            suggestion-title="Workflow Key Pool"
             @update:value="updateNodeConfig('push_keys', $event)"
           />
           <div class="field-help">
             Custom nodes may transform key names. Example: read <code>analysis</code>, write <code>summary_card</code>.
+          </div>
+          <div v-if="outgoingKeyNames.length" class="field-help">
+            Downstream edges currently reference: <code>{{ outgoingKeyNames.join(', ') }}</code>
           </div>
         </template>
 
@@ -530,7 +602,6 @@ const loopBodyOutputSuggestions = computed(() =>
               @input="updateNodeConfig('max_iterations', Number($event.target.value) || 1)"
             />
           </label>
-
           <div class="subsection-title">Terminate Condition</div>
           <label>
             <span>Mode</span>
@@ -550,21 +621,6 @@ const loopBodyOutputSuggestions = computed(() =>
               @input="updateNestedConfig('terminate_when', 'key', $event.target.value)"
             />
           </label>
-          <div v-if="loopBodyOutputSuggestions.length" class="suggestion-strip compact">
-            <div class="suggestion-title">Suggested Stop Keys</div>
-            <div class="suggestion-list">
-              <button
-                v-for="suggestion in loopBodyOutputSuggestions"
-                :key="suggestion.key"
-                type="button"
-                class="suggestion-chip"
-                @click="updateNestedConfig('terminate_when', 'key', suggestion.key)"
-              >
-                <span>{{ suggestion.key }}</span>
-                <small v-if="suggestion.value">{{ suggestion.value }}</small>
-              </button>
-            </div>
-          </div>
           <label v-if="selectedNode.config.terminate_when?.mode === 'key_equals'">
             <span>Value</span>
             <input
@@ -572,156 +628,16 @@ const loopBodyOutputSuggestions = computed(() =>
               @input="updateNestedConfig('terminate_when', 'value', $event.target.value)"
             />
           </label>
-
-          <div class="subsection-title">Body Type</div>
-          <label>
-            <span>Type</span>
-            <select
-              :value="selectedNode.config.body?.type || 'agent'"
-              @change="updateNestedConfig('body', 'type', $event.target.value)"
-            >
-              <option v-for="option in loopBodyTypeOptions" :key="option.value" :value="option.value">
-                {{ option.label }}
-              </option>
-            </select>
-          </label>
-
-          <div class="subsection-title">Body Input Mapping</div>
-          <MapEditor
-            :value="selectedNode.config.body?.input_mapping || {}"
-            key-label="Loop Body Input"
-            value-label="Meaning"
-            key-placeholder="message"
-            value-placeholder="Loop input"
-            :suggestions="loopInputSuggestions"
-            suggestion-title="From Incoming Edges"
-            @update:value="updateNestedConfig('body', 'input_mapping', $event)"
-          />
-
-          <div class="subsection-title">Body Output Mapping</div>
-          <MapEditor
-            :value="selectedNode.config.body?.output_mapping || {}"
-            key-label="Loop Body Output"
-            value-label="Meaning"
-            key-placeholder="done"
-            value-placeholder="Stop flag"
-            :suggestions="loopOutputSuggestions"
-            suggestion-title="For Downstream Nodes"
-            @update:value="updateNestedConfig('body', 'output_mapping', $event)"
-          />
-
-          <template v-if="(selectedNode.config.body?.type || 'agent') === 'agent'">
-            <label>
-              <span>Body Instructions</span>
-              <textarea
-                :value="selectedNode.config.body?.instructions || ''"
-                @input="updateNestedConfig('body', 'instructions', $event.target.value)"
-              />
-            </label>
-            <div class="field-help">
-              Same recommendation as agent instructions: describe what one loop iteration should do and what counts as completion.
-            </div>
-            <label>
-              <span>Body Prompt Template</span>
-              <textarea
-                :value="selectedNode.config.body?.prompt_template || ''"
-                @input="updateNestedConfig('body', 'prompt_template', $event.target.value)"
-              />
-            </label>
-            <div class="field-help">
-              Use placeholders from body <code>pull_keys</code> or body <code>input_mapping</code>, for example <code>Current state: {message}</code>.
-            </div>
-            <div class="subsection-title">Body Pull Keys</div>
-            <MapEditor
-              :value="selectedNode.config.body?.pull_keys || {}"
-              key-label="Input Key"
-              value-label="Meaning"
-              :suggestions="loopBodyInputSuggestions"
-              suggestion-title="Body Input Suggestions"
-              @update:value="updateNestedConfig('body', 'pull_keys', $event)"
-            />
-            <div class="subsection-title">Body Push Keys</div>
-            <MapEditor
-              :value="selectedNode.config.body?.push_keys || {}"
-              key-label="Output Key"
-              value-label="Meaning"
-              :suggestions="loopBodyOutputSuggestions"
-              suggestion-title="Body Output Suggestions"
-              @update:value="updateNestedConfig('body', 'push_keys', $event)"
-            />
-            <div class="field-help">{{ keyRuleHelp }}</div>
-            <div class="subsection-title">Body Behavior Rules</div>
-            <StringListEditor
-              :value="selectedNode.config.body?.behavior_rules || []"
-              placeholder="Return one iteration update."
-              :suggestions="nodeBehaviorRuleSuggestions"
-              suggestion-title="Common Node Rules"
-              @update:value="updateNestedConfig('body', 'behavior_rules', $event)"
-            />
-            <div class="subsection-title">Body Knowledge</div>
-            <ObjectListEditor
-              :value="selectedNode.config.body?.knowledge || []"
-              :fields="knowledgeFields"
-              :create-item="createKnowledgeItem"
-              :presets="knowledgePresets"
-              preset-title="Quick Add Knowledge"
-              @update:value="updateNestedConfig('body', 'knowledge', $event)"
-            />
-            <div class="subsection-title">Body Tools</div>
-            <ObjectListEditor
-              :value="selectedNode.config.body?.tools || []"
-              :fields="toolFields"
-              :create-item="createToolItem"
-              :presets="toolPresets"
-              preset-title="Quick Add Tools"
-              @update:value="updateNestedConfig('body', 'tools', $event)"
-            />
-          </template>
-
-          <template v-else>
-            <label>
-              <span>Body Custom Mode</span>
-              <select
-                :value="selectedNode.config.body?.mode || 'passthrough'"
-                @change="updateNestedConfig('body', 'mode', $event.target.value)"
-              >
-                <option v-for="option in customModeOptions" :key="option.value" :value="option.value">
-                  {{ option.label }}
-                </option>
-              </select>
-            </label>
-            <div v-if="(selectedNode.config.body?.mode || 'passthrough') === 'template'" class="subsection-title">Body Templates</div>
-            <MapEditor
-              v-if="(selectedNode.config.body?.mode || 'passthrough') === 'template'"
-              :value="selectedNode.config.body?.templates || {}"
-              key-label="Output Key"
-              value-label="Template"
-              :suggestions="loopBodyOutputSuggestions"
-              @update:value="updateNestedConfig('body', 'templates', $event)"
-            />
-            <div v-if="selectedNode.config.body?.mode === 'set'" class="subsection-title">Body Static Outputs</div>
-            <MapEditor
-              v-if="selectedNode.config.body?.mode === 'set'"
-              :value="selectedNode.config.body?.static_outputs || {}"
-              key-label="Output Key"
-              value-label="Static Value"
-              :suggestions="loopBodyOutputSuggestions"
-              @update:value="updateNestedConfig('body', 'static_outputs', $event)"
-            />
-            <div v-if="selectedNode.config.body?.mode === 'pick'" class="subsection-title">Body Pick Keys</div>
-            <MapEditor
-              v-if="selectedNode.config.body?.mode === 'pick'"
-              :value="selectedNode.config.body?.pick_keys || {}"
-              key-label="Output Key"
-              value-label="Source Key"
-              :suggestions="loopBodyInputSuggestions"
-              suggestion-value-mode="key"
-              @update:value="updateNestedConfig('body', 'pick_keys', $event)"
-            />
-            <div class="field-help">
-              In pick mode, the left side is the new output key and the right side is an existing input key to copy from.
-            </div>
-          </template>
+          <div class="field-help">
+            Loop internals now live in a dedicated editor. Open the loop editor to design inner nodes, inner edges, controller inputs, and controller outputs like a real MASFactory loop subgraph.
+          </div>
+          <div class="field-help">
+            Current inner graph: {{ (selectedNode.config.subgraph?.nodes || []).length }} nodes,
+            {{ (selectedNode.config.subgraph?.edges || []).length }} inner edges,
+            {{ (selectedNode.config.controller_inputs || []).length }} controller inputs,
+            {{ (selectedNode.config.controller_outputs || []).length }} controller outputs.
+          </div>
+          <button type="button" @click="$emit('open-loop-editor', selectedNode.id)">Edit Loop</button>
         </template>
 
         <button

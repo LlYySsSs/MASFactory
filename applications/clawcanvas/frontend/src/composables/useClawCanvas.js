@@ -1,3 +1,172 @@
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+export function createDefaultLoopConfig() {
+  return {
+    max_iterations: 3,
+    terminate_when: {
+      mode: 'key_truthy',
+      key: 'done',
+      value: true
+    },
+    controller_layout: {
+      input_position: { x: 40, y: 220 },
+      output_position: { x: 980, y: 220 }
+    },
+    controller: {
+      termination_mode: 'key_rule',
+      terminate_condition_prompt: '',
+      terminate_expression: '',
+      model_settings: {
+        model_name: '',
+        base_url: ''
+      },
+      tools: [],
+      memories: [],
+      retrievers: []
+    },
+    subgraph: {
+      nodes: [
+        {
+          id: 'loop_step_1',
+          type: 'agent',
+          label: 'Loop Step',
+          position: { x: 260, y: 180 },
+          config: {
+            instructions: 'Review the current state and decide whether the task is complete.',
+            prompt_template: 'Current state: {message}',
+            pull_keys: { message: 'Loop input' },
+            push_keys: { message: 'Loop output', done: 'Stop flag' },
+            behavior_rules: [],
+            knowledge: [],
+            tools: []
+          }
+        }
+      ],
+      edges: []
+    },
+    controller_inputs: [
+      {
+        id: 'controller_in_1',
+        target: 'loop_step_1',
+        mapping: { message: 'Loop input' }
+      }
+    ],
+    controller_outputs: [
+      {
+        id: 'controller_out_1',
+        source: 'loop_step_1',
+        mapping: { message: 'Loop output', done: 'Stop flag' }
+      }
+    ]
+  };
+}
+
+export function normalizeLoopConfig(rawConfig = {}) {
+  const config = clone(rawConfig || {});
+  if (config.subgraph && Array.isArray(config.subgraph.nodes) && Array.isArray(config.subgraph.edges)) {
+    return {
+      max_iterations: Number(config.max_iterations || 3),
+      terminate_when: {
+        mode: config.terminate_when?.mode || 'never',
+        key: config.terminate_when?.key || '',
+        value: config.terminate_when?.value ?? true
+      },
+      controller_layout: {
+        input_position: {
+          x: Number(config.controller_layout?.input_position?.x ?? 40),
+          y: Number(config.controller_layout?.input_position?.y ?? 220)
+        },
+        output_position: {
+          x: Number(config.controller_layout?.output_position?.x ?? 980),
+          y: Number(config.controller_layout?.output_position?.y ?? 220)
+        }
+      },
+      controller: {
+        termination_mode: config.controller?.termination_mode || 'key_rule',
+        terminate_condition_prompt: config.controller?.terminate_condition_prompt || '',
+        terminate_expression: config.controller?.terminate_expression || '',
+        model_settings: {
+          model_name: config.controller?.model_settings?.model_name || '',
+          base_url: config.controller?.model_settings?.base_url || ''
+        },
+        tools: clone(config.controller?.tools || []),
+        memories: clone(config.controller?.memories || []),
+        retrievers: clone(config.controller?.retrievers || [])
+      },
+      subgraph: {
+        nodes: clone(config.subgraph.nodes || []),
+        edges: clone(config.subgraph.edges || [])
+      },
+      controller_inputs: clone(config.controller_inputs || []),
+      controller_outputs: clone(config.controller_outputs || []),
+      attributes: clone(config.attributes || {})
+    };
+  }
+
+  if (config.body) {
+    const bodyNodeId = 'loop_step_1';
+    return {
+      max_iterations: Number(config.max_iterations || 3),
+      terminate_when: {
+        mode: config.terminate_when?.mode || 'never',
+        key: config.terminate_when?.key || '',
+        value: config.terminate_when?.value ?? true
+      },
+      controller_layout: {
+        input_position: { x: 40, y: 220 },
+        output_position: { x: 980, y: 220 }
+      },
+      controller: {
+        termination_mode: 'key_rule',
+        terminate_condition_prompt: '',
+        terminate_expression: '',
+        model_settings: {
+          model_name: '',
+          base_url: ''
+        },
+        tools: [],
+        memories: [],
+        retrievers: []
+      },
+      subgraph: {
+        nodes: [
+          {
+            id: bodyNodeId,
+            type: config.body.type || 'agent',
+            label: 'Loop Step',
+            position: { x: 260, y: 180 },
+            config: {
+              ...clone(config.body),
+              pull_keys: clone(config.body.pull_keys || config.body.input_mapping || {}),
+              push_keys: clone(config.body.push_keys || config.body.output_mapping || {})
+            }
+          }
+        ],
+        edges: []
+      },
+      controller_inputs: [
+        {
+          id: 'controller_in_1',
+          target: bodyNodeId,
+          mapping: clone(config.body.input_mapping || config.body.pull_keys || { message: 'Loop input' })
+        }
+      ],
+      controller_outputs: [
+        {
+          id: 'controller_out_1',
+          source: bodyNodeId,
+          mapping: clone(config.body.output_mapping || config.body.push_keys || { message: 'Loop output' })
+        }
+      ],
+      attributes: clone(config.attributes || {})
+    };
+  }
+
+  return createDefaultLoopConfig();
+}
+
 export function createDemoDocument() {
   return {
     id: 'demo_clawcanvas',
@@ -7,6 +176,12 @@ export function createDemoDocument() {
       query: 'Design a skill studio based on MASFactory.'
     },
     attributes: {},
+    key_descriptions: {
+      query: 'Original user request',
+      analysis: 'Structured analysis',
+      draft: 'Interim loop draft',
+      answer: 'Final design brief'
+    },
     manifest: {
       name: 'clawcanvas_demo_skill',
       version: '0.1.0',
@@ -53,40 +228,83 @@ export function createDemoDocument() {
         }
       },
       {
-        id: 'formatter',
-        type: 'custom',
-        label: 'Formatter',
-        position: { x: 660, y: 70 },
+        id: 'review_loop',
+        type: 'loop',
+        label: 'Review Loop',
+        position: { x: 700, y: 180 },
         config: {
-          mode: 'template',
-          templates: {
-            analysis_card: 'Summary: {analysis}'
+          max_iterations: 3,
+          terminate_when: { mode: 'key_truthy', key: 'done', value: true },
+          controller_layout: {
+            input_position: { x: 40, y: 220 },
+            output_position: { x: 980, y: 220 }
           },
-          pull_keys: { analysis: 'Structured analysis' },
-          push_keys: { analysis_card: 'Formatted card' },
-          static_outputs: {},
-          pick_keys: {}
-        }
-      },
-      {
-        id: 'designer',
-        type: 'agent',
-        label: 'Designer',
-        position: { x: 960, y: 260 },
-        config: {
-          instructions: 'Turn the analysis into a skill design brief.',
-          prompt_template: 'Request: {query}\nAnalysis: {analysis}\nCard: {analysis_card}',
-          pull_keys: {
-            query: 'Original request',
-            analysis: 'Analysis result',
-            analysis_card: 'Formatted analysis card'
+          controller: {
+            termination_mode: 'key_rule',
+            terminate_condition_prompt: '',
+            terminate_expression: '',
+            model_settings: {
+              model_name: ''
+            },
+            tools: [],
+            memories: [],
+            retrievers: []
           },
-          push_keys: { answer: 'Final design brief' },
-          behavior_rules: ['Prefer architecture-level guidance.'],
-          knowledge: [
+          subgraph: {
+            nodes: [
+              {
+                id: 'draft_writer',
+                type: 'agent',
+                label: 'Draft Writer',
+                position: { x: 240, y: 120 },
+                config: {
+                  instructions: 'Turn the analysis into a draft design brief.',
+                  prompt_template: 'Analysis: {analysis}',
+                  pull_keys: { analysis: 'Structured analysis' },
+                  push_keys: { draft: 'Draft design brief' },
+                  behavior_rules: [],
+                  knowledge: [],
+                  tools: []
+                }
+              },
+              {
+                id: 'draft_reviewer',
+                type: 'custom',
+                label: 'Draft Reviewer',
+                position: { x: 560, y: 220 },
+                config: {
+                  mode: 'set',
+                  pull_keys: { draft: 'Draft design brief' },
+                  push_keys: { answer: 'Final design brief', done: 'Stop flag' },
+                  static_outputs: {
+                    answer: 'Reviewed: {draft}',
+                    done: 'true'
+                  },
+                  pick_keys: {}
+                }
+              }
+            ],
+            edges: [
+              {
+                id: 'inner_edge_1',
+                source: 'draft_writer',
+                target: 'draft_reviewer',
+                mapping: { draft: 'Draft design brief' }
+              }
+            ]
+          },
+          controller_inputs: [
             {
-              title: 'Product Goal',
-              text: 'ClawCanvas packages MASFactory workflows into publishable skills.'
+              id: 'controller_in_1',
+              target: 'draft_writer',
+              mapping: { analysis: 'Structured analysis' }
+            }
+          ],
+          controller_outputs: [
+            {
+              id: 'controller_out_1',
+              source: 'draft_reviewer',
+              mapping: { answer: 'Final design brief', done: 'Stop flag' }
             }
           ]
         }
@@ -95,7 +313,7 @@ export function createDemoDocument() {
         id: 'end',
         type: 'end',
         label: 'End',
-        position: { x: 1260, y: 220 },
+        position: { x: 1080, y: 220 },
         config: {}
       }
     ],
@@ -109,24 +327,12 @@ export function createDemoDocument() {
       {
         id: 'edge_2',
         source: 'researcher',
-        target: 'formatter',
+        target: 'review_loop',
         mapping: { analysis: 'Analysis result' }
       },
       {
         id: 'edge_3',
-        source: 'researcher',
-        target: 'designer',
-        mapping: { query: 'Original request', analysis: 'Analysis result' }
-      },
-      {
-        id: 'edge_4',
-        source: 'formatter',
-        target: 'designer',
-        mapping: { analysis_card: 'Formatted analysis card' }
-      },
-      {
-        id: 'edge_5',
-        source: 'designer',
+        source: 'review_loop',
         target: 'end',
         mapping: { answer: 'Final answer' }
       }
@@ -135,7 +341,7 @@ export function createDemoDocument() {
 }
 
 export function nextNodeId(document, prefix) {
-  const taken = new Set(document.nodes.map((node) => node.id));
+  const taken = new Set((document.nodes || []).map((node) => node.id));
   let index = 1;
   while (taken.has(`${prefix}_${index}`)) {
     index += 1;
@@ -148,7 +354,7 @@ export function buildNodeTemplate(type, id) {
     return {
       id,
       type: 'agent',
-      label: `Agent ${id.split('_')[1]}`,
+      label: `Agent ${id.split('_')[1] || id}`,
       position: { x: 240, y: 160 },
       config: {
         instructions: 'Describe this node behavior.',
@@ -166,7 +372,7 @@ export function buildNodeTemplate(type, id) {
     return {
       id,
       type: 'custom',
-      label: `Custom ${id.split('_')[1]}`,
+      label: `Custom ${id.split('_')[1] || id}`,
       position: { x: 240, y: 220 },
       config: {
         mode: 'template',
@@ -183,28 +389,9 @@ export function buildNodeTemplate(type, id) {
     return {
       id,
       type: 'loop',
-      label: `Loop ${id.split('_')[1]}`,
+      label: `Loop ${id.split('_')[1] || id}`,
       position: { x: 240, y: 280 },
-      config: {
-        max_iterations: 3,
-        terminate_when: {
-          mode: 'key_truthy',
-          key: 'done',
-          value: true
-        },
-        body: {
-          type: 'agent',
-          instructions: 'Review the current state and decide whether the task is complete.',
-          prompt_template: 'Current state: {message}',
-          input_mapping: { message: 'Loop input' },
-          output_mapping: { message: 'Loop output', done: 'Stop flag' },
-          pull_keys: { message: 'Loop input' },
-          push_keys: { message: 'Loop output', done: 'Stop flag' },
-          behavior_rules: [],
-          knowledge: [],
-          tools: []
-        }
-      }
+      config: createDefaultLoopConfig()
     };
   }
 

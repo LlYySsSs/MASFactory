@@ -15,8 +15,10 @@ except ImportError:  # pragma: no cover
     CORS = None  # type: ignore[assignment]
 
 from .compiler import compile_document_to_graph
+from .key_pool import collect_document_key_pool, rename_document_key
 from .schema import build_demo_document, parse_document
 from .skill_packager import export_skill_package
+from .validation import analyze_document
 
 
 def create_app() -> "Flask":
@@ -33,20 +35,40 @@ def create_app() -> "Flask":
 
     @app.get("/api/demo")
     def demo():
-        return jsonify({"document": build_demo_document().to_dict()})
+        document = build_demo_document()
+        return jsonify({"document": document.to_dict(), "key_pool": collect_document_key_pool(document)})
 
     @app.post("/api/validate")
     def validate_document_route():
         payload = request.get_json(force=True) or {}
         document = parse_document(payload.get("document") or payload)
+        analysis = analyze_document(document)
         return jsonify(
             {
                 "ok": True,
                 "document": document.to_dict(),
+                "key_pool": analysis["key_pool"],
+                "warnings": analysis["warnings"],
                 "summary": {
                     "node_count": len(document.nodes),
                     "edge_count": len(document.edges),
+                    "warning_count": len(analysis["warnings"]),
                 },
+            }
+        )
+
+    @app.post("/api/key-pool/rename")
+    def rename_key_route():
+        payload = request.get_json(force=True) or {}
+        document = parse_document(payload.get("document") or payload)
+        old_key = str(payload.get("oldKey") or "")
+        new_key = str(payload.get("newKey") or "")
+        updated = rename_document_key(document, old_key, new_key)
+        return jsonify(
+            {
+                "ok": True,
+                "document": updated.to_dict(),
+                "key_pool": collect_document_key_pool(updated),
             }
         )
 

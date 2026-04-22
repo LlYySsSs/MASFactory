@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass, field
 from string import Formatter
 from typing import Any
 
-from .schema import CanvasDocument, CanvasNode
+from .runtime_bindings import (
+    RuntimeWarnings,
+    merge_tool_declarations,
+    resolve_agent_tools,
+    resolve_controller_capabilities,
+)
+from .schema import CanvasDocument, CanvasEdge, CanvasNode, Position
 
 
 @dataclass(slots=True)
@@ -37,34 +44,23 @@ def compile_document_to_graph(
 
     model = build_model(api_key=api_key, model_name=model_name, base_url=base_url)
     warnings = CompileWarnings()
+    runtime_warnings = RuntimeWarnings(warnings.add)
     shared_agent_context = _shared_agent_context(document)
     graph = RootGraph(name=_safe_graph_name(document.name), attributes=dict(document.attributes))
 
-    if shared_agent_context["tools"]:
-        warnings.add(
-            f"skill manifest defines {len(shared_agent_context['tools'])} tool entries, but manifest-level tool binding is metadata-only in the MVP"
-        )
-
     runtime_nodes: dict[str, Any] = {}
     for node in document.nodes:
-        if node.type == "agent":
-            runtime_nodes[node.id] = _create_agent_node(
-                graph,
-                node,
-                warnings,
-                model,
-                shared_agent_context=shared_agent_context,
-            )
-        elif node.type == "custom":
-            runtime_nodes[node.id] = _create_custom_node(graph, node, warnings)
-        elif node.type == "loop":
-            runtime_nodes[node.id] = _create_loop_node(
-                graph,
-                node,
-                warnings,
-                model,
-                shared_agent_context=shared_agent_context,
-            )
+        if node.type in {"start", "end"}:
+            continue
+        runtime_nodes[node.id] = _create_runtime_node(
+            graph,
+            node,
+            warnings,
+            model,
+            api_key=api_key,
+            shared_agent_context=shared_agent_context,
+            runtime_warnings=runtime_warnings,
+        )
 
     for edge in document.edges:
         source_node = _find_node(document, edge.source)
@@ -84,15 +80,59 @@ def compile_document_to_graph(
     return graph, warnings
 
 
-def _create_agent_node(graph, node: CanvasNode, warnings: CompileWarnings, model, *, shared_agent_context: dict[str, Any]):
+def _create_runtime_node(
+    graph,
+    node: CanvasNode,
+    warnings: CompileWarnings,
+    model,
+    *,
+    api_key: str,
+    shared_agent_context: dict[str, Any],
+    runtime_warnings: RuntimeWarnings,
+):
+    if node.type == "agent":
+        return _create_agent_node(
+            graph,
+            node,
+            warnings,
+            model,
+            shared_agent_context=shared_agent_context,
+            runtime_warnings=runtime_warnings,
+        )
+    if node.type == "custom":
+        return _create_custom_node(graph, node, warnings)
+    if node.type == "loop":
+        return _create_loop_node(
+            graph,
+            node,
+            warnings,
+            model,
+            api_key=api_key,
+            shared_agent_context=shared_agent_context,
+            runtime_warnings=runtime_warnings,
+        )
+    raise ValueError(f"unsupported runtime node type: {node.type}")
+
+
+def _create_agent_node(
+    graph,
+    node: CanvasNode,
+    warnings: CompileWarnings,
+    model,
+    *,
+    shared_agent_context: dict[str, Any],
+    runtime_warnings: RuntimeWarnings,
+):
     from masfactory.components.agents.agent import Agent
 
     config = dict(node.config)
-    tools = list(config.get("tools") or [])
-    if tools:
-        warnings.add(
-            f"node '{node.id}' defines {len(tools)} tool entries, but tool binding is metadata-only in the MVP"
-        )
+    node_tools = list(config.get("tools") or [])
+    shared_tools = list(shared_agent_context.get("tools") or [])
+    runtime_tools = resolve_agent_tools(
+        merge_tool_declarations(shared_tools, node_tools),
+        owner=f"agent '{node.id}'",
+        warnings=runtime_warnings,
+    )
 
     instructions = _compose_agent_instructions(config, shared_agent_context=shared_agent_context)
     prompt_template = str(config.get("prompt_template") or "{message}")
@@ -107,6 +147,7 @@ def _create_agent_node(graph, node: CanvasNode, warnings: CompileWarnings, model
         instructions=instructions,
         model=model,
         prompt_template=prompt_template,
+        tools=runtime_tools,
         pull_keys=pull_keys,
         push_keys=push_keys,
         attributes=attributes,
@@ -135,96 +176,92 @@ def _create_custom_node(graph, node: CanvasNode, warnings: CompileWarnings):
     )
 
 
-def _create_loop_node(graph, node: CanvasNode, warnings: CompileWarnings, model, *, shared_agent_context: dict[str, Any]):
+def _create_loop_node(
+    graph,
+    node: CanvasNode,
+    warnings: CompileWarnings,
+    model,
+    *,
+    api_key: str,
+    shared_agent_context: dict[str, Any],
+    runtime_warnings: RuntimeWarnings,
+):
     from masfactory.components.graphs.loop import Loop
 
     config = dict(node.config)
-    body = dict(config.get("body") or {})
     max_iterations = int(config.get("max_iterations") or 3)
-    loop_pull_keys = _normalize_keys(config.get("pull_keys")) or _normalize_keys(body.get("input_mapping")) or {}
-    loop_push_keys = _normalize_keys(config.get("push_keys")) or _normalize_keys(body.get("output_mapping")) or {}
+    controller_config = dict(config.get("controller") or {})
+    controller_inputs = [dict(item) for item in (config.get("controller_inputs") or [])]
+    controller_outputs = [dict(item) for item in (config.get("controller_outputs") or [])]
+    loop_pull_keys = _merge_edge_keys(controller_inputs, target_key="mapping")
+    loop_push_keys = _merge_edge_keys(controller_outputs, target_key="mapping")
     loop_attributes = dict(config.get("attributes") or {})
+    termination_mode = str(controller_config.get("termination_mode") or "key_rule").strip()
+    terminate_prompt = str(controller_config.get("terminate_condition_prompt") or "").strip()
+    terminate_function = _build_loop_terminate_function(config)
+    controller_model = None
+
+    if termination_mode == "prompt" and terminate_prompt:
+        controller_model_settings = dict(controller_config.get("model_settings") or {})
+        controller_model = build_model(
+            api_key=api_key,
+            model_name=str(controller_model_settings.get("model_name") or getattr(model, "_model_name", "gpt-4o-mini")),
+            base_url=str(controller_model_settings.get("base_url") or "") or None,
+        )
 
     loop = graph.create_node(
         Loop,
         name=node.id,
         max_iterations=max_iterations,
-        terminate_condition_function=_build_loop_terminate_function(config),
+        model=controller_model,
+        terminate_condition_prompt=terminate_prompt or None,
+        terminate_condition_function=terminate_function,
         pull_keys=loop_pull_keys,
         push_keys=loop_push_keys,
         attributes=loop_attributes,
     )
 
-    body_type = str(body.get("type") or "agent").strip()
-    input_mapping = _normalize_keys(body.get("input_mapping")) or _normalize_keys(body.get("pull_keys")) or {"message": "Loop input"}
-    output_mapping = _normalize_keys(body.get("output_mapping")) or _normalize_keys(body.get("push_keys")) or {"message": "Loop output"}
+    subgraph = dict(config.get("subgraph") or {})
+    inner_nodes = [_dict_to_canvas_node(item) for item in (subgraph.get("nodes") or [])]
+    inner_edges = [_dict_to_canvas_edge(item) for item in (subgraph.get("edges") or [])]
+    created: dict[str, Any] = {}
 
-    if body_type == "agent":
-        body_node = _create_loop_body_agent(
+    for inner_node in inner_nodes:
+        created[inner_node.id] = _create_runtime_node(
             loop,
-            node.id,
-            body,
+            inner_node,
             warnings,
             model,
-            input_mapping,
-            output_mapping,
+            api_key=api_key,
             shared_agent_context=shared_agent_context,
+            runtime_warnings=runtime_warnings,
         )
-    elif body_type == "custom":
-        body_node = _create_loop_body_custom(loop, node.id, body, warnings, input_mapping, output_mapping)
-    else:
-        raise ValueError(f"unsupported loop body type: {body_type}")
 
-    loop.edge_from_controller(body_node, keys=input_mapping)
-    loop.edge_to_controller(body_node, keys=output_mapping)
+    for inner_edge in inner_edges:
+        loop.create_edge(created[inner_edge.source], created[inner_edge.target], keys=dict(inner_edge.mapping))
+
+    for mapping in controller_inputs:
+        target = str(mapping.get("target") or "")
+        if target not in created:
+            raise ValueError(f"loop '{node.id}' controller input targets unknown inner node '{target}'")
+        loop.edge_from_controller(created[target], keys=_normalize_keys(mapping.get("mapping")))
+
+    for mapping in controller_outputs:
+        source = str(mapping.get("source") or "")
+        if source not in created:
+            raise ValueError(f"loop '{node.id}' controller output references unknown inner node '{source}'")
+        loop.edge_to_controller(created[source], keys=_normalize_keys(mapping.get("mapping")))
+
+    controller_tools, controller_memories, controller_retrievers = resolve_controller_capabilities(
+        controller_config,
+        owner=f"loop '{node.id}' controller",
+        warnings=runtime_warnings,
+    )
+    loop._controller._tools = list(controller_tools)
+    loop._controller._memories = list(controller_memories)
+    loop._controller._retrievers = list(controller_retrievers)
+
     return loop
-
-
-def _create_loop_body_agent(loop, node_id: str, body: dict[str, Any], warnings: CompileWarnings, model, input_mapping: dict[str, str], output_mapping: dict[str, str], *, shared_agent_context: dict[str, Any]):
-    from masfactory.components.agents.agent import Agent
-
-    tools = list(body.get("tools") or [])
-    if tools:
-        warnings.add(
-            f"loop '{node_id}' body defines {len(tools)} tool entries, but tool binding is metadata-only in the MVP"
-        )
-
-    instructions = _compose_agent_instructions(body, shared_agent_context=shared_agent_context)
-    prompt_template = str(body.get("prompt_template") or "{message}")
-    pull_keys = _normalize_keys(body.get("pull_keys")) or input_mapping
-    push_keys = _normalize_keys(body.get("push_keys")) or output_mapping
-    attributes = dict(body.get("attributes") or {})
-    model_settings = dict(body.get("model_settings") or {})
-
-    return loop.create_node(
-        Agent,
-        name=f"{node_id}_body",
-        instructions=instructions,
-        model=model,
-        prompt_template=prompt_template,
-        pull_keys=pull_keys,
-        push_keys=push_keys,
-        attributes=attributes,
-        role_name=str(body.get("role_name") or f"{node_id} body"),
-        model_settings=model_settings,
-    )
-
-
-def _create_loop_body_custom(loop, node_id: str, body: dict[str, Any], warnings: CompileWarnings, input_mapping: dict[str, str], output_mapping: dict[str, str]):
-    from masfactory.components.custom_node import CustomNode
-
-    mode = str(body.get("mode") or "passthrough").strip()
-    attributes = dict(body.get("attributes") or {})
-    forward = _build_custom_forward(f"{node_id}_body", mode, body, warnings)
-
-    return loop.create_node(
-        CustomNode,
-        name=f"{node_id}_body",
-        forward=forward,
-        pull_keys=_normalize_keys(body.get("pull_keys")) or input_mapping,
-        push_keys=_normalize_keys(body.get("push_keys")) or output_mapping,
-        attributes=attributes,
-    )
 
 
 def _compose_agent_instructions(config: dict[str, Any], *, shared_agent_context: dict[str, Any] | None = None) -> str:
@@ -323,6 +360,16 @@ def _build_custom_forward(node_id: str, mode: str, config: dict[str, Any], warni
 
 
 def _build_loop_terminate_function(config: dict[str, Any]):
+    controller = dict(config.get("controller") or {})
+    controller_mode = str(controller.get("termination_mode") or "key_rule").strip()
+    if controller_mode == "prompt":
+        return None
+    if controller_mode == "expression":
+        expression = str(controller.get("terminate_expression") or "").strip()
+        if not expression:
+            return None
+        return _build_safe_terminate_expression(expression)
+
     terminate = dict(config.get("terminate_when") or {})
     mode = str(terminate.get("mode") or "never").strip()
     key = str(terminate.get("key") or "").strip()
@@ -341,12 +388,128 @@ def _build_loop_terminate_function(config: dict[str, Any]):
     return _terminate
 
 
+def _build_safe_terminate_expression(expression: str):
+    tree = ast.parse(expression, mode="eval")
+
+    def _evaluate(node, context):
+        if isinstance(node, ast.Expression):
+            return _evaluate(node.body, context)
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.Name):
+            return context.get(node.id)
+        if isinstance(node, ast.BoolOp):
+            values = [_evaluate(value, context) for value in node.values]
+            if isinstance(node.op, ast.And):
+                return all(values)
+            if isinstance(node.op, ast.Or):
+                return any(values)
+            raise ValueError("unsupported boolean operator")
+        if isinstance(node, ast.UnaryOp):
+            operand = _evaluate(node.operand, context)
+            if isinstance(node.op, ast.Not):
+                return not operand
+            if isinstance(node.op, ast.USub):
+                return -operand
+            if isinstance(node.op, ast.UAdd):
+                return +operand
+            raise ValueError("unsupported unary operator")
+        if isinstance(node, ast.BinOp):
+            left = _evaluate(node.left, context)
+            right = _evaluate(node.right, context)
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, ast.Div):
+                return left / right
+            if isinstance(node.op, ast.Mod):
+                return left % right
+            raise ValueError("unsupported arithmetic operator")
+        if isinstance(node, ast.Compare):
+            left = _evaluate(node.left, context)
+            for op, comparator in zip(node.ops, node.comparators):
+                right = _evaluate(comparator, context)
+                ok = None
+                if isinstance(op, ast.Eq):
+                    ok = left == right
+                elif isinstance(op, ast.NotEq):
+                    ok = left != right
+                elif isinstance(op, ast.Gt):
+                    ok = left > right
+                elif isinstance(op, ast.GtE):
+                    ok = left >= right
+                elif isinstance(op, ast.Lt):
+                    ok = left < right
+                elif isinstance(op, ast.LtE):
+                    ok = left <= right
+                elif isinstance(op, ast.In):
+                    ok = left in right
+                elif isinstance(op, ast.NotIn):
+                    ok = left not in right
+                else:
+                    raise ValueError("unsupported comparison operator")
+                if not ok:
+                    return False
+                left = right
+            return True
+        if isinstance(node, ast.Subscript):
+            value = _evaluate(node.value, context)
+            key = _evaluate(node.slice, context)
+            return value[key]
+        if isinstance(node, ast.List):
+            return [_evaluate(item, context) for item in node.elts]
+        if isinstance(node, ast.Tuple):
+            return tuple(_evaluate(item, context) for item in node.elts)
+        raise ValueError(f"unsupported expression node: {node.__class__.__name__}")
+
+    def _terminate(input_dict: dict[str, object], attributes: dict[str, object]) -> bool:
+        context = {
+            **attributes,
+            **input_dict,
+            "input": input_dict,
+            "attributes": attributes,
+        }
+        return bool(_evaluate(tree, context))
+
+    return _terminate
+
+
 def _normalize_keys(raw: Any) -> dict[str, str]:
     if raw is None:
         return {}
     if not isinstance(raw, dict):
         raise ValueError("pull_keys/push_keys must be dict values")
     return {str(key): str(value) for key, value in raw.items()}
+
+
+def _merge_edge_keys(items: list[dict[str, Any]], *, target_key: str = "mapping") -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for item in items:
+        merged.update(_normalize_keys(item.get(target_key)))
+    return merged
+
+
+def _dict_to_canvas_node(raw: dict[str, Any]) -> CanvasNode:
+    position = dict(raw.get("position") or {})
+    return CanvasNode(
+        id=str(raw.get("id")),
+        type=str(raw.get("type")),
+        label=str(raw.get("label") or raw.get("id")),
+        position=Position(x=float(position.get("x", 0)), y=float(position.get("y", 0))),
+        config=dict(raw.get("config") or {}),
+    )
+
+
+def _dict_to_canvas_edge(raw: dict[str, Any]) -> CanvasEdge:
+    return CanvasEdge(
+        id=str(raw.get("id")),
+        source=str(raw.get("source")),
+        target=str(raw.get("target")),
+        mapping=_normalize_keys(raw.get("mapping")),
+    )
 
 
 def _render_template(template: str, context: dict[str, object]) -> str:

@@ -19,6 +19,7 @@ const emit = defineEmits([
   'move-node',
   'create-edge',
   'rename-node',
+  'open-loop',
   'status'
 ]);
 
@@ -91,6 +92,9 @@ const previewEdge = computed(() => {
 });
 
 function nodeHandleRole(node, side) {
+  if (node.meta?.handleMode?.[side]) {
+    return node.meta.handleMode[side];
+  }
   if (side === 'left') {
     return node.type === 'start' ? 'disabled' : 'input';
   }
@@ -100,6 +104,7 @@ function nodeHandleRole(node, side) {
 function onNodeMouseDown(event, node) {
   if (editingNodeId.value) return;
   emit('select-node', node.id);
+  if (node.meta?.locked) return;
   dragState = {
     nodeId: node.id,
     startX: event.clientX,
@@ -237,6 +242,7 @@ function selectEdge(edgeId) {
 }
 
 function beginRename(node) {
+  if (node.meta?.renamable === false) return;
   emit('select-node', node.id);
   editingNodeId.value = node.id;
   renameDraft.value = node.label;
@@ -259,6 +265,18 @@ function commitRename() {
 function cancelRename() {
   editingNodeId.value = '';
   renameDraft.value = '';
+}
+
+function canOpenLoop(node) {
+  return node.type === 'loop' || Boolean(node.meta?.openLoop);
+}
+
+function handleNodeDoubleClick(node) {
+  if (canOpenLoop(node)) {
+    emit('open-loop', node.id);
+    return;
+  }
+  beginRename(node);
 }
 </script>
 
@@ -327,6 +345,7 @@ function cancelRename() {
         ]"
         :style="{ left: `${boardX(node.position.x)}px`, top: `${boardY(node.position.y)}px` }"
         @mousedown.stop="onNodeMouseDown($event, node)"
+        @dblclick.stop="handleNodeDoubleClick(node)"
       >
         <button
           type="button"
@@ -340,8 +359,8 @@ function cancelRename() {
           :class="{ disabled: nodeHandleRole(node, 'right') === 'disabled' }"
           @click.stop="clickHandle(node, 'right')"
         />
-        <div class="node-type">{{ node.type }}</div>
-        <div v-if="editingNodeId !== node.id" class="node-label" @dblclick.stop="beginRename(node)">
+        <div class="node-type">{{ node.meta?.displayType || node.type }}</div>
+        <div v-if="editingNodeId !== node.id" class="node-label" @dblclick.stop="handleNodeDoubleClick(node)">
           {{ node.label }}
         </div>
         <input
@@ -356,6 +375,14 @@ function cancelRename() {
           @blur="commitRename"
         />
         <div class="node-id">{{ node.id }}</div>
+        <button
+          v-if="canOpenLoop(node)"
+          type="button"
+          class="mini-button loop-open-button"
+          @click.stop="emit('open-loop', node.id)"
+        >
+          Edit Loop
+        </button>
       </div>
     </div>
   </div>

@@ -1,9 +1,11 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import CanvasBoard from './components/CanvasBoard.vue';
 import InspectorPanel from './components/InspectorPanel.vue';
+import KeyPoolPanel from './components/KeyPoolPanel.vue';
+import LoopEditorModal from './components/LoopEditorModal.vue';
 import MapEditor from './components/MapEditor.vue';
-import { buildNodeTemplate, createDemoDocument, nextNodeId } from './composables/useClawCanvas';
+import { buildNodeTemplate, createDemoDocument, nextNodeId, normalizeLoopConfig } from './composables/useClawCanvas';
 
 const API_ROOT = 'http://127.0.0.1:5000/api';
 
@@ -17,6 +19,8 @@ const statusText = ref('Idle');
 const validationSummary = ref(null);
 const runResult = ref(null);
 const warnings = ref([]);
+const keyPool = ref({ keys: [], key_names: [], key_map: {} });
+const loopEditorNodeId = ref('');
 
 const selectedNode = computed(() =>
   documentRef.value.nodes.find((node) => node.id === selectedNodeId.value) || null
@@ -29,6 +33,88 @@ const nodesById = computed(() => {
   }
   return map;
 });
+
+const selectedLoopNode = computed(() =>
+  documentRef.value.nodes.find((node) => node.id === loopEditorNodeId.value && node.type === 'loop') || null
+);
+
+function collectKeyPoolFromDocument(document) {
+  const keyMap = new Map();
+
+  function addKey(key, description = '', source = 'unknown', owner = 'workflow') {
+    const normalizedKey = String(key || '').trim();
+    if (!normalizedKey) return;
+    const existing = keyMap.get(normalizedKey) || {
+      key: normalizedKey,
+      description: '',
+      sources: [],
+      owners: []
+    };
+    const normalizedDescription = String(description || '').trim();
+    if (normalizedDescription && !existing.description) {
+      existing.description = normalizedDescription;
+    }
+    if (source && !existing.sources.includes(source)) existing.sources.push(source);
+    if (owner && !existing.owners.includes(owner)) existing.owners.push(owner);
+    keyMap.set(normalizedKey, existing);
+  }
+
+  for (const [key, value] of Object.entries(document.inputs || {})) {
+    addKey(key, value, 'document.inputs', 'workflow');
+  }
+  for (const [key, value] of Object.entries(document.attributes || {})) {
+    addKey(key, value, 'document.attributes', 'workflow');
+  }
+  for (const [key, value] of Object.entries(document.key_descriptions || {})) {
+    addKey(key, value, 'document.key_descriptions', 'workflow');
+  }
+  for (const edge of document.edges || []) {
+    for (const [key, value] of Object.entries(edge.mapping || {})) {
+      addKey(key, value, 'edge.mapping', edge.id);
+    }
+  }
+  for (const node of document.nodes || []) {
+    collectNodeConfigKeys(node.config || {}, node.id, addKey);
+  }
+
+  const keys = [...keyMap.values()].sort((a, b) => a.key.localeCompare(b.key));
+  keyPool.value = {
+    keys,
+    key_names: keys.map((item) => item.key),
+    key_map: Object.fromEntries(keys.map((item) => [item.key, item.description]))
+  };
+}
+
+function collectNodeConfigKeys(config, owner, addKey) {
+  for (const fieldName of ['pull_keys', 'push_keys', 'templates', 'static_outputs', 'pick_keys']) {
+    for (const [key, value] of Object.entries(config[fieldName] || {})) {
+      addKey(key, value, `node.${fieldName}`, owner);
+    }
+  }
+  const terminateWhen = config.terminate_when || {};
+  if (terminateWhen.key) {
+    addKey(terminateWhen.key, 'Loop terminate condition key', 'node.terminate_when', owner);
+  }
+  for (const controllerEdge of config.controller_inputs || []) {
+    for (const [key, value] of Object.entries(controllerEdge.mapping || {})) {
+      addKey(key, value, 'node.controller_inputs', owner);
+    }
+  }
+  for (const controllerEdge of config.controller_outputs || []) {
+    for (const [key, value] of Object.entries(controllerEdge.mapping || {})) {
+      addKey(key, value, 'node.controller_outputs', owner);
+    }
+  }
+  const subgraph = config.subgraph || {};
+  for (const edge of subgraph.edges || []) {
+    for (const [key, value] of Object.entries(edge.mapping || {})) {
+      addKey(key, value, 'node.subgraph.edge.mapping', `${owner}.${edge.id}`);
+    }
+  }
+  for (const node of subgraph.nodes || []) {
+    collectNodeConfigKeys(node.config || {}, `${owner}.${node.id}`, addKey);
+  }
+}
 
 function addNode(type) {
   const id = nextNodeId(documentRef.value, type);
@@ -44,6 +130,7 @@ function addNode(type) {
 
 function resetDemo() {
   documentRef.value = createDemoDocument();
+  collectKeyPoolFromDocument(documentRef.value);
   selectedNodeId.value = '';
   selectedEdgeId.value = '';
   validationSummary.value = null;
@@ -127,6 +214,99 @@ function updateManifest(patch) {
   };
 }
 
+function updateKeyPoolDescriptions(nextMap) {
+  documentRef.value.key_descriptions = Object.fromEntries(
+    Object.entries(nextMap || {})
+      .map(([key, value]) => [String(key || '').trim(), String(value || '')])
+      .filter(([key]) => key)
+  );
+  collectKeyPoolFromDocument(documentRef.value);
+}
+
+function renameKeyInObject(obj, oldKey, newKey) {
+  const next = { ...(obj || {}) };
+  if (!(oldKey in next) || !newKey || oldKey === newKey) return next;
+  next[newKey] = next[oldKey];
+  delete next[oldKey];
+  return next;
+}
+
+function renamePlaceholders(text, oldKey, newKey) {
+  if (typeof text !== 'string') return text;
+  return text.replaceAll(`{${oldKey}}`, `{${newKey}}`);
+}
+
+function renameKeyInNodeConfig(config, oldKey, newKey) {
+  const next = { ...(config || {}) };
+  for (const fieldName of ['pull_keys', 'push_keys', 'templates', 'static_outputs', 'pick_keys']) {
+    next[fieldName] = renameKeyInObject(next[fieldName], oldKey, newKey);
+  }
+  next.prompt_template = renamePlaceholders(next.prompt_template, oldKey, newKey);
+  next.instructions = renamePlaceholders(next.instructions, oldKey, newKey);
+  if (next.terminate_when?.key === oldKey) {
+    next.terminate_when = { ...next.terminate_when, key: newKey };
+  }
+  next.controller_inputs = (next.controller_inputs || []).map((edge) => ({
+    ...edge,
+    mapping: renameKeyInObject(edge.mapping, oldKey, newKey)
+  }));
+  next.controller_outputs = (next.controller_outputs || []).map((edge) => ({
+    ...edge,
+    mapping: renameKeyInObject(edge.mapping, oldKey, newKey)
+  }));
+  if (next.subgraph) {
+    next.subgraph = {
+      ...next.subgraph,
+      edges: (next.subgraph.edges || []).map((edge) => ({
+        ...edge,
+        mapping: renameKeyInObject(edge.mapping, oldKey, newKey)
+      })),
+      nodes: (next.subgraph.nodes || []).map((node) => ({
+        ...node,
+        config: renameKeyInNodeConfig(node.config, oldKey, newKey)
+      }))
+    };
+  }
+  return next;
+}
+
+function deriveLoopInputKeys(config) {
+  const normalized = normalizeLoopConfig(config || {});
+  const merged = {};
+  for (const item of normalized.controller_inputs || []) {
+    Object.assign(merged, item.mapping || {});
+  }
+  return merged;
+}
+
+function deriveLoopOutputKeys(config) {
+  const normalized = normalizeLoopConfig(config || {});
+  const merged = {};
+  for (const item of normalized.controller_outputs || []) {
+    Object.assign(merged, item.mapping || {});
+  }
+  return merged;
+}
+
+function renameWorkflowKey({ oldKey, newKey }) {
+  const from = String(oldKey || '').trim();
+  const to = String(newKey || '').trim();
+  if (!from || !to || from === to) return;
+
+  documentRef.value.inputs = renameKeyInObject(documentRef.value.inputs, from, to);
+  documentRef.value.attributes = renameKeyInObject(documentRef.value.attributes, from, to);
+  documentRef.value.key_descriptions = renameKeyInObject(documentRef.value.key_descriptions, from, to);
+  documentRef.value.edges = documentRef.value.edges.map((edge) => ({
+    ...edge,
+    mapping: renameKeyInObject(edge.mapping, from, to)
+  }));
+  documentRef.value.nodes = documentRef.value.nodes.map((node) => ({
+    ...node,
+    config: renameKeyInNodeConfig(node.config, from, to)
+  }));
+  collectKeyPoolFromDocument(documentRef.value);
+}
+
 function deleteNode(nodeId) {
   documentRef.value.nodes = documentRef.value.nodes.filter((node) => node.id !== nodeId);
   documentRef.value.edges = documentRef.value.edges.filter(
@@ -140,6 +320,9 @@ function deleteNode(nodeId) {
     if (!edgeStillExists) selectedEdgeId.value = '';
   }
   statusText.value = `Deleted node ${nodeId}`;
+  if (loopEditorNodeId.value === nodeId) {
+    loopEditorNodeId.value = '';
+  }
 }
 
 function deleteEdge(edgeId) {
@@ -151,6 +334,7 @@ function deleteEdge(edgeId) {
 }
 
 function onGlobalKeyDown(event) {
+  if (loopEditorNodeId.value) return;
   const target = event.target;
   const tagName = target?.tagName?.toLowerCase?.() || '';
   const isEditable =
@@ -187,7 +371,16 @@ function updateEdgeMapping(edgeId, mapping) {
   const edge = documentRef.value.edges.find((item) => item.id === edgeId);
   if (!edge) return;
   edge.mapping = mapping;
+  collectKeyPoolFromDocument(documentRef.value);
 }
+
+watch(
+  documentRef,
+  (nextDocument) => {
+    collectKeyPoolFromDocument(nextDocument);
+  },
+  { deep: true }
+);
 
 function mappingSuggestionsForEdge(edge) {
   const sourceNode = nodesById.value.get(edge.source);
@@ -211,12 +404,7 @@ function readNodeInputKeys(node) {
   if (!node) return {};
   if (node.type === 'agent' || node.type === 'custom') return node.config.pull_keys || {};
   if (node.type === 'loop') {
-    return (
-      node.config.pull_keys ||
-      node.config.body?.input_mapping ||
-      node.config.body?.pull_keys ||
-      {}
-    );
+    return deriveLoopInputKeys(node.config);
   }
   return {};
 }
@@ -225,14 +413,24 @@ function readNodeOutputKeys(node) {
   if (!node) return {};
   if (node.type === 'agent' || node.type === 'custom') return node.config.push_keys || {};
   if (node.type === 'loop') {
-    return (
-      node.config.push_keys ||
-      node.config.body?.output_mapping ||
-      node.config.body?.push_keys ||
-      {}
-    );
+    return deriveLoopOutputKeys(node.config);
   }
   return {};
+}
+
+function openLoopEditor(nodeId) {
+  const node = documentRef.value.nodes.find((item) => item.id === nodeId && item.type === 'loop');
+  if (!node) return;
+  loopEditorNodeId.value = nodeId;
+}
+
+function updateLoopConfig({ id, config }) {
+  updateNode({
+    id,
+    patch: {
+      config
+    }
+  });
 }
 
 async function fetchApi(path, payload) {
@@ -253,6 +451,8 @@ async function validateWorkflow() {
   try {
     const data = await fetchApi('/validate', { document: documentRef.value });
     validationSummary.value = data.summary;
+    if (data.key_pool) keyPool.value = data.key_pool;
+    warnings.value = data.warnings || [];
     statusText.value = 'Validation passed';
   } catch (error) {
     statusText.value = error.message;
@@ -298,11 +498,14 @@ async function loadDemoFromBackend() {
     const response = await fetch(`${API_ROOT}/demo`);
     const data = await response.json();
     documentRef.value = data.document;
+    keyPool.value = data.key_pool || keyPool.value;
     statusText.value = 'Backend demo loaded';
   } catch (error) {
     statusText.value = error.message;
   }
 }
+
+collectKeyPoolFromDocument(documentRef.value);
 </script>
 
 <template>
@@ -364,6 +567,12 @@ async function loadDemoFromBackend() {
           />
         </div>
       </section>
+
+      <KeyPoolPanel
+        :key-pool="keyPool"
+        @update-key-pool="updateKeyPoolDescriptions"
+        @rename-key="renameWorkflowKey"
+      />
     </aside>
 
     <main class="workspace">
@@ -389,6 +598,7 @@ async function loadDemoFromBackend() {
         @move-node="moveNode"
         @create-edge="createEdge"
         @rename-node="renameNode"
+        @open-loop="openLoopEditor"
         @status="statusText = $event"
       />
 
@@ -413,10 +623,21 @@ async function loadDemoFromBackend() {
         :selected-node="selectedNode"
         :manifest="documentRef.manifest"
         :document="documentRef"
+        :key-pool="keyPool"
         @update-node="updateNode"
         @update-manifest="updateManifest"
         @delete-node="deleteNode"
+        @open-loop-editor="openLoopEditor"
       />
     </aside>
+
+    <LoopEditorModal
+      v-if="selectedLoopNode"
+      :loop-node="selectedLoopNode"
+      :key-pool="keyPool"
+      @close="loopEditorNodeId = ''"
+      @rename-loop="renameNode"
+      @update-loop-config="updateLoopConfig"
+    />
   </div>
 </template>

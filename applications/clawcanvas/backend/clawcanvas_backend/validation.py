@@ -19,8 +19,10 @@ def analyze_document(document: CanvasDocument) -> dict[str, Any]:
     global_keys = set(key_pool["key_names"])
     warnings: list[str] = []
     shared_tools = list(document.manifest.tools or [])
+    nodes_by_id = {node.id: node for node in document.nodes}
 
     warnings.extend(validate_tool_declarations(shared_tools, owner="skill manifest"))
+    warnings.extend(_analyze_workflow_edges(document, nodes_by_id))
 
     for node in document.nodes:
         warnings.extend(_analyze_node(node.id, node.config or {}, node.type, global_keys, shared_tools))
@@ -29,6 +31,27 @@ def analyze_document(document: CanvasDocument) -> dict[str, Any]:
         "key_pool": key_pool,
         "warnings": sorted(set(warnings)),
     }
+
+
+def _analyze_workflow_edges(document: CanvasDocument, nodes_by_id: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    entry_keys = {str(key).strip() for key in (document.inputs or {}).keys() if str(key).strip()}
+
+    for edge in document.edges:
+        source = nodes_by_id.get(edge.source)
+        target = nodes_by_id.get(edge.target)
+        if source is None or target is None:
+            continue
+
+        edge_keys = [str(key).strip() for key in (edge.mapping or {}).keys() if str(key).strip()]
+        if source.type == "start":
+            missing = sorted(key for key in edge_keys if key not in entry_keys)
+            if missing:
+                warnings.append(
+                    f"edge '{edge.id}' maps entry keys {missing}, but document.inputs only provides {sorted(entry_keys)}"
+                )
+
+    return warnings
 
 
 def _analyze_node(

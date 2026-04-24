@@ -375,12 +375,18 @@ export function buildNodeTemplate(type, id) {
       label: `Custom ${id.split('_')[1] || id}`,
       position: { x: 240, y: 220 },
       config: {
-        mode: 'template',
+        mode: 'python',
+        python_code: `def forward(input_dict, attributes):
+    message = input_dict.get("message", "")
+    return {
+        "message": f"processed: {message}",
+    }
+`,
         templates: { message: 'Transformed: {message}' },
         static_outputs: {},
-        pick_keys: {},
+        pick_keys: { original_message: 'message' },
         pull_keys: { message: 'Input message' },
-        push_keys: { message: 'Output message' }
+        push_keys: { message: 'Output message', original_message: 'Copied input message' }
       }
     };
   }

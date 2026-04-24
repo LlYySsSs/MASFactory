@@ -52,7 +52,8 @@ const customModeOptions = [
   { value: 'passthrough', label: 'Passthrough' },
   { value: 'template', label: 'Template' },
   { value: 'set', label: 'Set Static Values' },
-  { value: 'pick', label: 'Pick Inputs' }
+  { value: 'pick', label: 'Pick Inputs' },
+  { value: 'compose', label: 'Compose Mixed Output' }
 ];
 
 function createToolItem() {
@@ -157,6 +158,38 @@ const promptWarnings = computed(() => {
     return `Prompt template: {${key}} cannot be found in pull_keys or workflow key pool.`;
   }).filter(Boolean);
 });
+
+function mappingValueWarnings(mapping, allowedKeys, globalKeys, scopeLabel) {
+  const allowed = new Set(Object.keys(allowedKeys || {}));
+  const global = new Set(globalKeys || []);
+  const warnings = [];
+  for (const [field, value] of Object.entries(mapping || {})) {
+    for (const key of extractPlaceholders(String(value || ''))) {
+      if (allowed.has(key)) continue;
+      if (global.has(key)) warnings.push(`${scopeLabel} '${field}': {${key}} is in workflow key pool but missing from pull_keys.`);
+      else warnings.push(`${scopeLabel} '${field}': {${key}} cannot be found in pull_keys or workflow key pool.`);
+    }
+  }
+  return warnings;
+}
+
+const customTemplateWarnings = computed(() =>
+  mappingValueWarnings(
+    props.selectedNode?.config?.templates || {},
+    props.selectedNode?.config?.pull_keys || {},
+    props.keyPool?.key_names || [],
+    'Custom templates'
+  )
+);
+
+const customStaticWarnings = computed(() =>
+  mappingValueWarnings(
+    props.selectedNode?.config?.static_outputs || {},
+    props.selectedNode?.config?.pull_keys || {},
+    props.keyPool?.key_names || [],
+    'Custom static outputs'
+  )
+);
 </script>
 
 <template>
@@ -245,10 +278,13 @@ const promptWarnings = computed(() => {
             <option v-for="option in customModeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
           </select>
         </label>
+        <div class="field-help">
+          <code>compose</code> lets an inner custom node combine pick, template, and static outputs in one step.
+        </div>
 
-        <div v-if="(selectedNode.config.mode || 'passthrough') === 'template'" class="subsection-title">Templates</div>
+        <div v-if="['template', 'compose'].includes(selectedNode.config.mode || 'passthrough')" class="subsection-title">Templates</div>
         <MapEditor
-          v-if="(selectedNode.config.mode || 'passthrough') === 'template'"
+          v-if="['template', 'compose'].includes(selectedNode.config.mode || 'passthrough')"
           :value="selectedNode.config.templates || {}"
           key-label="Output Key"
           value-label="Template"
@@ -256,10 +292,14 @@ const promptWarnings = computed(() => {
           suggestion-title="Workflow Key Pool"
           @update:value="updateNodeConfig('templates', $event)"
         />
+        <div v-if="customTemplateWarnings.length" class="warning-block">
+          <div class="warning-title">Template Warnings</div>
+          <div v-for="warning in customTemplateWarnings" :key="warning" class="field-help warning-text">{{ warning }}</div>
+        </div>
 
-        <div v-if="selectedNode.config.mode === 'set'" class="subsection-title">Static Outputs</div>
+        <div v-if="['set', 'compose'].includes(selectedNode.config.mode || 'passthrough')" class="subsection-title">Static Outputs</div>
         <MapEditor
-          v-if="selectedNode.config.mode === 'set'"
+          v-if="['set', 'compose'].includes(selectedNode.config.mode || 'passthrough')"
           :value="selectedNode.config.static_outputs || {}"
           key-label="Output Key"
           value-label="Static Value"
@@ -267,10 +307,14 @@ const promptWarnings = computed(() => {
           suggestion-title="Workflow Key Pool"
           @update:value="updateNodeConfig('static_outputs', $event)"
         />
+        <div v-if="customStaticWarnings.length" class="warning-block">
+          <div class="warning-title">Static Output Warnings</div>
+          <div v-for="warning in customStaticWarnings" :key="warning" class="field-help warning-text">{{ warning }}</div>
+        </div>
 
-        <div v-if="selectedNode.config.mode === 'pick'" class="subsection-title">Pick Keys</div>
+        <div v-if="['pick', 'compose'].includes(selectedNode.config.mode || 'passthrough')" class="subsection-title">Pick Keys</div>
         <MapEditor
-          v-if="selectedNode.config.mode === 'pick'"
+          v-if="['pick', 'compose'].includes(selectedNode.config.mode || 'passthrough')"
           :value="selectedNode.config.pick_keys || {}"
           key-label="Output Key"
           value-label="Source Key"
@@ -300,6 +344,7 @@ const promptWarnings = computed(() => {
           suggestion-title="Workflow Key Pool"
           @update:value="updateNodeConfig('push_keys', $event)"
         />
+        <div v-if="selectedNode.config.mode === 'compose'" class="field-help">Compose mode applies outputs in the order pick, template, then static outputs.</div>
         <div v-if="outgoingKeyNames.length" class="field-help">Downstream edges reference: <code>{{ outgoingKeyNames.join(', ') }}</code></div>
       </template>
 

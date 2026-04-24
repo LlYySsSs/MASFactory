@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import traceback
 from pathlib import Path
+from typing import Any
 
 try:
     from flask import Flask, jsonify, request
@@ -19,6 +21,59 @@ from .key_pool import collect_document_key_pool, rename_document_key
 from .schema import build_demo_document, parse_document
 from .skill_packager import export_skill_package
 from .validation import analyze_document
+
+
+def _exception_chain(err: Exception) -> list[dict[str, str]]:
+    chain: list[dict[str, str]] = []
+    current: Exception | None = err
+    seen: set[int] = set()
+
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(
+            {
+                "type": current.__class__.__name__,
+                "message": str(current),
+            }
+        )
+        next_exc = current.__cause__ or current.__context__
+        current = next_exc if isinstance(next_exc, Exception) else None
+    return chain
+
+
+def _unwrap_retry_error(err: Exception) -> Exception | None:
+    last_attempt = getattr(err, "last_attempt", None)
+    if last_attempt is None or not hasattr(last_attempt, "exception"):
+        return None
+    try:
+        unwrapped = last_attempt.exception()
+    except Exception:
+        return None
+    return unwrapped if isinstance(unwrapped, Exception) else None
+
+
+def _serialize_exception(err: Exception) -> dict[str, Any]:
+    root = _unwrap_retry_error(err) or err
+    chain = _exception_chain(root if root is not err else err)
+    tb = "".join(traceback.format_exception(type(err), err, err.__traceback__))
+
+    payload: dict[str, Any] = {
+        "error": str(err),
+        "error_type": err.__class__.__name__,
+        "root_cause": str(root),
+        "root_cause_type": root.__class__.__name__,
+        "cause_chain": chain,
+        "traceback": tb[-12000:],
+    }
+
+    if root is not err:
+        payload["retry_error"] = {
+            "message": str(err),
+            "root_cause": str(root),
+            "root_cause_type": root.__class__.__name__,
+        }
+
+    return payload
 
 
 def create_app() -> "Flask":
@@ -96,6 +151,10 @@ def create_app() -> "Flask":
                 "output": output,
                 "attributes": attributes,
                 "warnings": warnings.items,
+                "runtime": {
+                    "model_name": model_name,
+                    "base_url": base_url,
+                },
             }
         )
 
@@ -105,19 +164,27 @@ def create_app() -> "Flask":
         document = parse_document(payload.get("document") or payload)
         run_output = dict(payload.get("runOutput") or {})
         warnings = list(payload.get("warnings") or [])
+        export_format = str(payload.get("format") or "json").lower()
+
+        if export_format not in {"json", "markdown", "zip"}:
+            return jsonify({"ok": False, "error": f"Unsupported format: {export_format}"}), 400
+
         export_root = Path(__file__).resolve().parents[2] / "exports"
         result = export_skill_package(
             document,
             export_root=export_root,
             run_output=run_output,
             warnings=warnings,
+            format=export_format,
         )
         return jsonify({"ok": True, **result})
 
     @app.errorhandler(Exception)
     def handle_exception(err: Exception):
-        status = getattr(err, "code", 500)
-        return jsonify({"ok": False, "error": str(err)}), status
+        status = getattr(err, "code", None)
+        if status is None:
+            status = 400 if isinstance(err, (ValueError, KeyError)) else 500
+        return jsonify({"ok": False, **_serialize_exception(err)}), status
 
     return app
 

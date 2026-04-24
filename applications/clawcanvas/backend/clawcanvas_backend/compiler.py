@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import ast
+import json
+import math
+import re
 from dataclasses import dataclass, field
 from string import Formatter
 from typing import Any
@@ -327,7 +330,7 @@ def _shared_agent_context(document: CanvasDocument) -> dict[str, Any]:
 
 
 def _build_custom_forward(node_id: str, mode: str, config: dict[str, Any], warnings: CompileWarnings):
-    if mode not in {"passthrough", "template", "set", "pick"}:
+    if mode not in {"passthrough", "template", "set", "pick", "compose", "python"}:
         raise ValueError(f"custom node '{node_id}' has unsupported mode '{mode}'")
 
     templates = dict(config.get("templates") or {})
@@ -338,6 +341,9 @@ def _build_custom_forward(node_id: str, mode: str, config: dict[str, Any], warni
         warnings.add(f"custom node '{node_id}' uses template mode with no templates configured")
     if mode == "set" and not isinstance(static_outputs, dict):
         raise ValueError(f"custom node '{node_id}' static_outputs must be a dict")
+    if mode == "python" and not str(config.get("python_code") or "").strip():
+        warnings.add(f"custom node '{node_id}' uses python mode with empty python_code")
+    python_forward = _compile_python_custom_forward(node_id, config) if mode == "python" else None
 
     def forward(input_dict: dict[str, object], attributes: dict[str, object] | None = None) -> dict[str, object]:
         attrs = attributes or {}
@@ -354,9 +360,67 @@ def _build_custom_forward(node_id: str, mode: str, config: dict[str, Any], warni
             for out_key, in_key in picks.items():
                 out[str(out_key)] = context.get(str(in_key))
             return out
+        if mode == "compose":
+            out: dict[str, object] = {}
+            for out_key, in_key in picks.items():
+                out[str(out_key)] = context.get(str(in_key))
+            out.update({key: _render_template(str(value), context) for key, value in templates.items()})
+            resolved_static = _resolve_payload(static_outputs, context)
+            if isinstance(resolved_static, dict):
+                out.update(resolved_static)
+            return out
+        if mode == "python":
+            return python_forward(input_dict, attrs) if python_forward is not None else dict(input_dict)
         raise ValueError(f"unsupported custom node mode: {mode}")
 
     return forward
+
+
+def _compile_python_custom_forward(node_id: str, config: dict[str, Any]):
+    code = str(config.get("python_code") or "").strip()
+    if not code:
+        def _empty_forward(input_dict: dict[str, object], attributes: dict[str, object]) -> dict[str, object]:
+            return dict(input_dict)
+
+        return _empty_forward
+
+    safe_builtins = {
+        "dict": dict,
+        "list": list,
+        "set": set,
+        "tuple": tuple,
+        "len": len,
+        "str": str,
+        "int": int,
+        "float": float,
+        "bool": bool,
+        "sum": sum,
+        "min": min,
+        "max": max,
+        "sorted": sorted,
+        "enumerate": enumerate,
+        "range": range,
+        "zip": zip,
+        "isinstance": isinstance,
+        "ValueError": ValueError,
+        "TypeError": TypeError,
+        "Exception": Exception,
+        "print": print,
+    }
+    globals_dict = {
+        "__builtins__": safe_builtins,
+        "json": json,
+        "math": math,
+        "re": re,
+    }
+    locals_dict: dict[str, Any] = {}
+    exec(compile(code, f"<clawcanvas-custom:{node_id}>", "exec"), globals_dict, locals_dict)
+    runtime_forward = locals_dict.get("forward") or globals_dict.get("forward")
+    if not callable(runtime_forward):
+        raise ValueError(
+            f"custom node '{node_id}' python_code must define a callable forward function"
+        )
+    return runtime_forward
 
 
 def _build_loop_terminate_function(config: dict[str, Any]):

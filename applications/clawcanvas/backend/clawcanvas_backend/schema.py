@@ -40,6 +40,11 @@ class SkillManifest:
     tools: list[dict[str, Any]] = field(default_factory=list)
     knowledge: list[dict[str, Any]] = field(default_factory=list)
     behavior: dict[str, Any] = field(default_factory=dict)
+    author: str = ""
+    license: str = "MIT"
+    dependencies: list[str] = field(default_factory=list)
+    homepage: str = ""
+    repository: str = ""
 
 
 @dataclass(slots=True)
@@ -207,6 +212,11 @@ def parse_document(payload: dict[str, Any]) -> CanvasDocument:
         tools=[dict(item) for item in (manifest_raw.get("tools") or [])],
         knowledge=[dict(item) for item in (manifest_raw.get("knowledge") or [])],
         behavior=dict(manifest_raw.get("behavior") or {}),
+        author=str(manifest_raw.get("author") or ""),
+        license=str(manifest_raw.get("license") or "MIT"),
+        dependencies=[str(item) for item in (manifest_raw.get("dependencies") or [])],
+        homepage=str(manifest_raw.get("homepage") or ""),
+        repository=str(manifest_raw.get("repository") or ""),
     )
 
     document = CanvasDocument(
@@ -268,7 +278,7 @@ def _validate_graph(nodes: list[CanvasNode], edges: list[CanvasEdge], *, require
 
         if node.type == "custom":
             mode = str(node.config.get("mode") or "passthrough").strip()
-            if mode not in {"passthrough", "template", "set", "pick"}:
+            if mode not in {"passthrough", "template", "set", "pick", "compose", "python"}:
                 raise ValueError(f"custom node '{node.id}' has unsupported mode '{mode}'")
 
         if node.type == "loop":

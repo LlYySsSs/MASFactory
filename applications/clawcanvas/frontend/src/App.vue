@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import CanvasBoard from './components/CanvasBoard.vue';
+import CustomEditorModal from './components/CustomEditorModal.vue';
 import InspectorPanel from './components/InspectorPanel.vue';
 import KeyPoolPanel from './components/KeyPoolPanel.vue';
 import LoopEditorModal from './components/LoopEditorModal.vue';
@@ -15,12 +16,15 @@ const selectedEdgeId = ref('');
 const apiKey = ref('');
 const baseUrl = ref('');
 const modelName = ref('gpt-4o-mini');
+const exportFormat = ref('json');
 const statusText = ref('Idle');
 const validationSummary = ref(null);
 const runResult = ref(null);
 const warnings = ref([]);
 const keyPool = ref({ keys: [], key_names: [], key_map: {} });
 const loopEditorNodeId = ref('');
+const customEditorNodeId = ref('');
+const settingsModal = ref('');
 
 const selectedNode = computed(() =>
   documentRef.value.nodes.find((node) => node.id === selectedNodeId.value) || null
@@ -36,6 +40,10 @@ const nodesById = computed(() => {
 
 const selectedLoopNode = computed(() =>
   documentRef.value.nodes.find((node) => node.id === loopEditorNodeId.value && node.type === 'loop') || null
+);
+
+const selectedCustomNode = computed(() =>
+  documentRef.value.nodes.find((node) => node.id === customEditorNodeId.value && node.type === 'custom') || null
 );
 
 function collectKeyPoolFromDocument(document) {
@@ -168,24 +176,31 @@ function createEdge({ source, target }) {
     id,
     source,
     target,
-    mapping: defaultEdgeMapping(sourceNode.type, targetNode.type)
+    mapping: defaultEdgeMapping(sourceNode, targetNode)
   });
   statusText.value = `Created edge ${source} -> ${target}`;
 }
 
-function defaultEdgeMapping(sourceType, targetType) {
-  if (targetType === 'agent') {
-    return { message: 'message' };
+function defaultEdgeMapping(sourceNode, targetNode) {
+  const sourceKeys = Object.entries(readNodeOutputKeys(sourceNode));
+  const targetKeys = Object.entries(readNodeInputKeys(targetNode));
+  const sourceKeySet = new Set(sourceKeys.map(([key]) => key));
+
+  const intersection = targetKeys.filter(([key]) => sourceKeySet.has(key));
+  if (intersection.length) {
+    return Object.fromEntries(intersection.map(([key, value]) => [key, String(value ?? '')]));
   }
-  if (targetType === 'custom') {
-    return { message: 'message' };
+
+  if (sourceKeys.length) {
+    const [key, value] = sourceKeys[0];
+    return { [key]: String(value ?? '') };
   }
-  if (targetType === 'loop') {
-    return { message: 'loop seed' };
+
+  if (targetKeys.length) {
+    const [key, value] = targetKeys[0];
+    return { [key]: String(value ?? '') };
   }
-  if (targetType === 'end') {
-    return sourceType === 'loop' ? { message: 'loop result' } : { message: 'result' };
-  }
+
   return { message: 'message' };
 }
 
@@ -211,6 +226,20 @@ function updateManifest(patch) {
   documentRef.value.manifest = {
     ...documentRef.value.manifest,
     ...patch
+  };
+}
+
+function updateDocumentField(field, value) {
+  documentRef.value = {
+    ...documentRef.value,
+    [field]: value
+  };
+}
+
+function updateDocumentMap(field, value) {
+  documentRef.value = {
+    ...documentRef.value,
+    [field]: { ...(value || {}) }
   };
 }
 
@@ -402,6 +431,7 @@ function mappingSuggestionsForEdge(edge) {
 
 function readNodeInputKeys(node) {
   if (!node) return {};
+  if (node.type === 'start') return documentRef.value.inputs || {};
   if (node.type === 'agent' || node.type === 'custom') return node.config.pull_keys || {};
   if (node.type === 'loop') {
     return deriveLoopInputKeys(node.config);
@@ -411,6 +441,7 @@ function readNodeInputKeys(node) {
 
 function readNodeOutputKeys(node) {
   if (!node) return {};
+  if (node.type === 'start') return documentRef.value.inputs || {};
   if (node.type === 'agent' || node.type === 'custom') return node.config.push_keys || {};
   if (node.type === 'loop') {
     return deriveLoopOutputKeys(node.config);
@@ -424,7 +455,22 @@ function openLoopEditor(nodeId) {
   loopEditorNodeId.value = nodeId;
 }
 
+function openCustomEditor(nodeId) {
+  const node = documentRef.value.nodes.find((item) => item.id === nodeId && item.type === 'custom');
+  if (!node) return;
+  customEditorNodeId.value = nodeId;
+}
+
 function updateLoopConfig({ id, config }) {
+  updateNode({
+    id,
+    patch: {
+      config
+    }
+  });
+}
+
+function updateCustomConfig({ id, config }) {
   updateNode({
     id,
     patch: {
@@ -439,9 +485,17 @@ async function fetchApi(path, payload) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
-  const data = await response.json();
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { ok: false, error: text || `Request failed: ${response.status}` };
+  }
   if (!response.ok || data.ok === false) {
-    throw new Error(data.error || `Request failed: ${response.status}`);
+    const error = new Error(data.error || `Request failed: ${response.status}`);
+    error.payload = data;
+    throw error;
   }
   return data;
 }
@@ -450,12 +504,25 @@ async function validateWorkflow() {
   statusText.value = 'Validating workflow...';
   try {
     const data = await fetchApi('/validate', { document: documentRef.value });
-    validationSummary.value = data.summary;
+    validationSummary.value = {
+      ok: true,
+      validatedAt: new Date().toISOString(),
+      ...(data.summary || {}),
+      warning_count: (data.warnings || []).length
+    };
     if (data.key_pool) keyPool.value = data.key_pool;
     warnings.value = data.warnings || [];
-    statusText.value = 'Validation passed';
+    statusText.value = `Validation passed (${(data.warnings || []).length} warnings)`;
   } catch (error) {
-    statusText.value = error.message;
+    const payload = error.payload || {};
+    validationSummary.value = {
+      ok: false,
+      validatedAt: new Date().toISOString(),
+      ...payload,
+      error: payload.error || error.message
+    };
+    warnings.value = payload.cause_chain?.length ? payload.cause_chain.map((item) => `${item.type}: ${item.message}`) : [error.message];
+    statusText.value = `Validation failed: ${error.message}`;
   }
 }
 
@@ -470,11 +537,26 @@ async function runWorkflow() {
         modelName: modelName.value
       }
     });
-    runResult.value = data.output;
+    runResult.value = {
+      ok: true,
+      executedAt: new Date().toISOString(),
+      output: data.output,
+      attributes: data.attributes,
+      warnings: data.warnings || [],
+      runtime: data.runtime || {}
+    };
     warnings.value = data.warnings || [];
-    statusText.value = 'Workflow run completed';
+    statusText.value = `Workflow run completed (${(data.warnings || []).length} warnings)`;
   } catch (error) {
-    statusText.value = error.message;
+    const payload = error.payload || {};
+    runResult.value = {
+      ok: false,
+      executedAt: new Date().toISOString(),
+      ...payload,
+      error: payload.error || error.message
+    };
+    warnings.value = payload.cause_chain?.length ? payload.cause_chain.map((item) => `${item.type}: ${item.message}`) : [error.message];
+    statusText.value = `Run failed: ${error.message}`;
   }
 }
 
@@ -484,9 +566,18 @@ async function exportSkill() {
     const data = await fetchApi('/export-skill', {
       document: documentRef.value,
       runOutput: runResult.value || {},
-      warnings: warnings.value
+      warnings: warnings.value,
+      format: exportFormat.value
     });
-    statusText.value = `Skill exported to ${data.export_dir}`;
+
+    let exportInfo = `Skill exported to ${data.export_dir}`;
+    if (data.format === 'markdown') {
+      exportInfo += ` (SKILL.md format)`;
+    } else if (data.format === 'zip') {
+      exportInfo += ` (ZIP: ${data.zip_path})`;
+    }
+
+    statusText.value = exportInfo;
   } catch (error) {
     statusText.value = error.message;
   }
@@ -527,19 +618,12 @@ collectKeyPoolFromDocument(documentRef.value);
       </section>
 
       <section class="tool-group">
-        <div class="group-title">Runtime</div>
-        <label>
-          <span>API Key</span>
-          <input v-model="apiKey" type="password" placeholder="sk-..." />
-        </label>
-        <label>
-          <span>Base URL</span>
-          <input v-model="baseUrl" placeholder="Optional OpenAI-compatible endpoint" />
-        </label>
-        <label>
-          <span>Model Name</span>
-          <input v-model="modelName" placeholder="gpt-4o-mini" />
-        </label>
+        <div class="group-title">Workflow Setup</div>
+        <div class="helper-text">Open focused editors instead of putting every workflow-level control in the left sidebar.</div>
+        <button type="button" class="ghost" @click="settingsModal = 'document'">Open Document</button>
+        <button type="button" class="ghost" @click="settingsModal = 'runtime'">Open Runtime</button>
+        <button type="button" class="ghost" @click="settingsModal = 'edges'">Open Edges</button>
+        <button type="button" class="ghost" @click="settingsModal = 'keys'">Open Workflow Keys</button>
       </section>
 
       <section class="tool-group">
@@ -548,31 +632,6 @@ collectKeyPoolFromDocument(documentRef.value);
         <button type="button" @click="runWorkflow">Run Test</button>
         <button type="button" @click="exportSkill">Export Skill</button>
       </section>
-
-      <section class="tool-group">
-        <div class="group-title">Edges</div>
-        <div class="helper-text">Click one node handle, then click a compatible handle on another node to connect them.</div>
-        <div v-for="edge in documentRef.edges" :key="edge.id" class="edge-card">
-          <div class="edge-title">{{ edge.source }} -> {{ edge.target }}</div>
-          <MapEditor
-            :value="edge.mapping"
-            key-label="Edge Key"
-            value-label="Meaning"
-            key-placeholder="message"
-            value-placeholder="What this field carries"
-            help="Edge mapping says which fields move across this connection."
-            :suggestions="mappingSuggestionsForEdge(edge)"
-            suggestion-title="From Connected Nodes"
-            @update:value="updateEdgeMapping(edge.id, $event)"
-          />
-        </div>
-      </section>
-
-      <KeyPoolPanel
-        :key-pool="keyPool"
-        @update-key-pool="updateKeyPoolDescriptions"
-        @rename-key="renameWorkflowKey"
-      />
     </aside>
 
     <main class="workspace">
@@ -588,31 +647,36 @@ collectKeyPoolFromDocument(documentRef.value);
         </div>
       </header>
 
-      <CanvasBoard
-        :nodes="documentRef.nodes"
-        :edges="documentRef.edges"
-        :selected-node-id="selectedNodeId"
-        :selected-edge-id="selectedEdgeId"
-        @select-node="selectNode"
-        @select-edge="selectEdge"
-        @move-node="moveNode"
-        @create-edge="createEdge"
-        @rename-node="renameNode"
-        @open-loop="openLoopEditor"
-        @status="statusText = $event"
-      />
+      <section class="canvas-stage">
+        <CanvasBoard
+          :nodes="documentRef.nodes"
+          :edges="documentRef.edges"
+          :selected-node-id="selectedNodeId"
+          :selected-edge-id="selectedEdgeId"
+          @select-node="selectNode"
+          @select-edge="selectEdge"
+          @move-node="moveNode"
+          @create-edge="createEdge"
+          @rename-node="renameNode"
+          @open-loop="openLoopEditor"
+          @status="statusText = $event"
+        />
+      </section>
 
-      <section class="console-grid">
+      <section class="results-stack">
         <article class="console-card">
           <div class="console-title">Validation</div>
+          <div class="helper-text">Structural checks, key-pool analysis, and pre-run warnings are shown here.</div>
           <pre>{{ validationSummary ? JSON.stringify(validationSummary, null, 2) : 'Not validated yet.' }}</pre>
         </article>
         <article class="console-card">
           <div class="console-title">Run Output</div>
+          <div class="helper-text">Successful runs include output and final attributes. Failed runs include error type, cause chain, and traceback.</div>
           <pre>{{ runResult ? JSON.stringify(runResult, null, 2) : 'No run result yet.' }}</pre>
         </article>
         <article class="console-card">
           <div class="console-title">Warnings</div>
+          <div class="helper-text">Warnings are non-fatal issues discovered during validation or runtime preparation.</div>
           <pre>{{ warnings.length ? JSON.stringify(warnings, null, 2) : 'No warnings.' }}</pre>
         </article>
       </section>
@@ -628,6 +692,7 @@ collectKeyPoolFromDocument(documentRef.value);
         @update-manifest="updateManifest"
         @delete-node="deleteNode"
         @open-loop-editor="openLoopEditor"
+        @open-custom-editor="openCustomEditor"
       />
     </aside>
 
@@ -639,5 +704,123 @@ collectKeyPoolFromDocument(documentRef.value);
       @rename-loop="renameNode"
       @update-loop-config="updateLoopConfig"
     />
+
+    <CustomEditorModal
+      v-if="selectedCustomNode"
+      :custom-node="selectedCustomNode"
+      :key-pool="keyPool"
+      @close="customEditorNodeId = ''"
+      @rename-custom="renameNode"
+      @update-custom-config="updateCustomConfig"
+    />
+
+    <div v-if="settingsModal" class="loop-modal-backdrop" @click.self="settingsModal = ''">
+      <div class="loop-modal-shell settings-modal-shell">
+        <header class="loop-modal-header">
+          <div>
+            <div class="eyebrow">Workflow Settings</div>
+            <h2>
+              {{
+                settingsModal === 'document'
+                  ? 'Document'
+                  : settingsModal === 'runtime'
+                    ? 'Runtime And Export'
+                    : settingsModal === 'edges'
+                      ? 'Edge Mapping'
+                      : 'Workflow Keys'
+              }}
+            </h2>
+            <p v-if="settingsModal === 'document'">`document` is the whole workflow JSON. `document.inputs` are the values sent into the workflow entry when you click Run Test. `document.attributes` are workflow-level MASFactory attributes visible through pull_keys.</p>
+            <p v-else-if="settingsModal === 'runtime'">Runtime settings are only used when executing the workflow from ClawCanvas. Export settings control the output package format.</p>
+            <p v-else-if="settingsModal === 'edges'">Each edge row defines one key propagated horizontally from the left node to the right node.</p>
+            <p v-else>Workflow keys are the shared key pool accumulated from inputs, attributes, nodes, and edge mappings.</p>
+          </div>
+          <button type="button" class="ghost" @click="settingsModal = ''">Close</button>
+        </header>
+
+        <div class="settings-modal-body">
+          <section v-if="settingsModal === 'document'" class="panel-section">
+            <label>
+              <span>Document Name</span>
+              <input :value="documentRef.name" @input="updateDocumentField('name', $event.target.value)" />
+            </label>
+            <label>
+              <span>Document Description</span>
+              <textarea :value="documentRef.description" @input="updateDocumentField('description', $event.target.value)" />
+            </label>
+            <MapEditor
+              :value="documentRef.inputs"
+              key-label="Input Key"
+              value-label="Test Value"
+              key-placeholder="query"
+              value-placeholder="What should be passed into workflow entry"
+              help="This is document.inputs. Run Test sends these values into the workflow entry node."
+              :suggestions="keyPool.keys"
+              suggestion-title="Workflow Key Pool"
+              @update:value="updateDocumentMap('inputs', $event)"
+            />
+            <MapEditor
+              :value="documentRef.attributes"
+              key-label="Attribute Key"
+              value-label="Initial Value"
+              key-placeholder="workspace"
+              value-placeholder="Optional workflow-level attribute"
+              help="Workflow attributes are MASFactory outer-scope attributes available to nodes through pull_keys."
+              :suggestions="keyPool.keys"
+              suggestion-title="Workflow Key Pool"
+              @update:value="updateDocumentMap('attributes', $event)"
+            />
+          </section>
+
+          <section v-else-if="settingsModal === 'runtime'" class="panel-section">
+            <label>
+              <span>API Key</span>
+              <input v-model="apiKey" type="password" placeholder="sk-..." />
+            </label>
+            <label>
+              <span>Base URL</span>
+              <input v-model="baseUrl" placeholder="Optional OpenAI-compatible endpoint" />
+            </label>
+            <label>
+              <span>Model Name</span>
+              <input v-model="modelName" placeholder="gpt-4o-mini" />
+            </label>
+            <label>
+              <span>Export Format</span>
+              <select v-model="exportFormat">
+                <option value="json">JSON (Legacy)</option>
+                <option value="markdown">SKILL.md</option>
+                <option value="zip">ZIP Package</option>
+              </select>
+            </label>
+          </section>
+
+          <section v-else-if="settingsModal === 'edges'" class="panel-section">
+            <div class="helper-text">Click one node handle, then click a compatible handle on another node to connect them.</div>
+            <div v-for="edge in documentRef.edges" :key="edge.id" class="edge-card">
+              <div class="edge-title">{{ edge.source }} -> {{ edge.target }}</div>
+              <MapEditor
+                :value="edge.mapping"
+                key-label="Edge Key"
+                value-label="Meaning"
+                key-placeholder="message"
+                value-placeholder="What this field carries"
+                help="Edge mapping says which fields move across this connection."
+                :suggestions="mappingSuggestionsForEdge(edge)"
+                suggestion-title="From Connected Nodes"
+                @update:value="updateEdgeMapping(edge.id, $event)"
+              />
+            </div>
+          </section>
+
+          <KeyPoolPanel
+            v-else
+            :key-pool="keyPool"
+            @update-key-pool="updateKeyPoolDescriptions"
+            @rename-key="renameWorkflowKey"
+          />
+        </div>
+      </div>
+    </div>
   </div>
 </template>

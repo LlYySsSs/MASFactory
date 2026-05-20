@@ -8,7 +8,7 @@ import LoopEditorModal from './components/LoopEditorModal.vue';
 import MapEditor from './components/MapEditor.vue';
 import { buildNodeTemplate, createDemoDocument, nextNodeId, normalizeLoopConfig } from './composables/useClawCanvas';
 
-const API_ROOT = 'http://127.0.0.1:5000/api';
+const API_ROOT = String(import.meta.env.VITE_API_ROOT || 'http://127.0.0.1:5000/api').replace(/\/$/, '');
 
 const documentRef = ref(createDemoDocument());
 const selectedNodeId = ref('');
@@ -480,11 +480,32 @@ function updateCustomConfig({ id, config }) {
 }
 
 async function fetchApi(path, payload) {
-  const response = await fetch(`${API_ROOT}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
+  let response;
+  try {
+    response = await fetch(`${API_ROOT}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  } catch (error) {
+    const wrapped = new Error(
+      `Cannot reach backend at ${API_ROOT}. Start the Flask server and verify the API port.`
+    );
+    wrapped.payload = {
+      ok: false,
+      error: wrapped.message,
+      error_type: error?.name || 'NetworkError',
+      cause_chain: [
+        {
+          type: error?.name || 'NetworkError',
+          message: error?.message || 'Unknown network error'
+        }
+      ],
+      api_root: API_ROOT,
+      request_path: path
+    };
+    throw wrapped;
+  }
   const text = await response.text();
   let data = {};
   try {
@@ -567,6 +588,11 @@ async function exportSkill() {
       document: documentRef.value,
       runOutput: runResult.value || {},
       warnings: warnings.value,
+      runtime: {
+        apiKey: apiKey.value,
+        baseUrl: baseUrl.value,
+        modelName: modelName.value
+      },
       format: exportFormat.value
     });
 
@@ -587,12 +613,21 @@ async function loadDemoFromBackend() {
   statusText.value = 'Loading backend demo...';
   try {
     const response = await fetch(`${API_ROOT}/demo`);
+    if (!response.ok) {
+      throw new Error(`Backend demo request failed: ${response.status}`);
+    }
     const data = await response.json();
     documentRef.value = data.document;
     keyPool.value = data.key_pool || keyPool.value;
     statusText.value = 'Backend demo loaded';
   } catch (error) {
-    statusText.value = error.message;
+    statusText.value = `Cannot reach backend at ${API_ROOT}`;
+    validationSummary.value = {
+      ok: false,
+      validatedAt: new Date().toISOString(),
+      error: `Cannot reach backend at ${API_ROOT}. Start the Flask server and verify the API port.`
+    };
+    warnings.value = [error.message || 'Unknown backend connection error'];
   }
 }
 

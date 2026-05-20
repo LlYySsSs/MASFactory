@@ -176,7 +176,7 @@ function updateMode(value) {
             </div>
             <textarea
               class="custom-code-editor"
-              :value="customNode.config.python_code || starterPython"
+              :value="customNode.config.python_code ?? starterPython"
               spellcheck="false"
               @input="updateConfig('python_code', $event.target.value)"
             />

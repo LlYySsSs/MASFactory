@@ -4,6 +4,7 @@ import CanvasBoard from './CanvasBoard.vue';
 import LoopNodeInspector from './LoopNodeInspector.vue';
 import MapEditor from './MapEditor.vue';
 import ObjectListEditor from './ObjectListEditor.vue';
+import ToolListEditor from './ToolListEditor.vue';
 import { buildNodeTemplate, nextNodeId, normalizeLoopConfig } from '../composables/useClawCanvas';
 
 const CONTROLLER_IN_ID = '__controller_in__';
@@ -21,9 +22,9 @@ const selectedEdgeId = ref('');
 const nestedLoopId = ref('');
 
 const controllerCapabilityFields = [
-  { key: 'name', label: 'Name', placeholder: 'controller_memory' },
+  { key: 'name', label: 'Name', placeholder: 'history_memory / vector_memory / keyword_retriever' },
   { key: 'binding', label: 'Binding', placeholder: 'builtin / mcp / custom' },
-  { key: 'description', label: 'Description', placeholder: 'What this capability is for', multiline: true }
+  { key: 'description', label: 'Description', placeholder: 'Configuration and purpose', multiline: true }
 ];
 
 function clone(value) {
@@ -470,7 +471,7 @@ function focusControllerEdge(edgeId, type) {
 }
 
 function createCapabilityItem() {
-  return { name: '', binding: '', description: '' };
+  return { name: '', binding: 'builtin', description: '' };
 }
 
 function onLoopKeyDown(event) {
@@ -640,10 +641,10 @@ onBeforeUnmount(() => {
               MASFactory loop controllers can carry tools, memories, and retrievers into the controller runtime. ClawCanvas now binds supported declarations onto the real loop controller: tools support <code>builtin</code> and configured <code>api</code>, memories support <code>history_memory</code> and <code>vector_memory</code>, retrievers support <code>keyword_retriever</code>, <code>vector_retriever</code>, and <code>filesystem_retriever</code>. <code>mcp</code> still needs an external connector layer.
             </div>
             <div class="subsection-title">Controller Tools</div>
-            <ObjectListEditor
+            <ToolListEditor
               :value="loopConfig.controller?.tools || []"
-              :fields="controllerCapabilityFields"
-              :create-item="createCapabilityItem"
+              title="Controller Tools"
+              help="These tools are attached to the real MASFactory loop controller runtime."
               @update:value="updateControllerField('tools', $event)"
             />
             <div class="subsection-title">Controller Memories</div>

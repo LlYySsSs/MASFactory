@@ -4,6 +4,7 @@ import BehaviorEditor from './BehaviorEditor.vue';
 import MapEditor from './MapEditor.vue';
 import ObjectListEditor from './ObjectListEditor.vue';
 import StringListEditor from './StringListEditor.vue';
+import ToolListEditor from './ToolListEditor.vue';
 
 const props = defineProps({
   selectedNode: { type: Object, default: null },
@@ -17,22 +18,6 @@ const emit = defineEmits(['update-node', 'update-manifest', 'delete-node', 'open
 const detailGroup = ref('');
 const detailSection = ref('');
 const nodeModalGroups = new Set(['node', 'agent', 'custom', 'loop']);
-
-const toolFields = [
-  { key: 'name', label: 'Name', placeholder: 'echo / json_inspect / http_api' },
-  {
-    key: 'binding',
-    label: 'Binding',
-    options: [
-      { value: 'mcp', label: 'mcp' },
-      { value: 'builtin', label: 'builtin' },
-      { value: 'api', label: 'api' },
-      { value: 'other', label: 'other' }
-    ],
-    help: 'Binding means how this tool is connected at runtime. builtin and api are wired by the current backend. mcp still needs an external endpoint/config layer before it can run.'
-  },
-  { key: 'description', label: 'Description', placeholder: 'What this tool does', multiline: true }
-];
 
 const knowledgeFields = [
   { key: 'title', label: 'Title', placeholder: 'Refund policy' },
@@ -52,32 +37,6 @@ const nodeBehaviorRuleSuggestions = [
   'Only use the provided context.',
   'List assumptions briefly.',
   'Return structured output.'
-];
-const toolPresets = [
-  {
-    label: 'Echo',
-    description: 'Return text unchanged',
-    item: { name: 'echo', binding: 'builtin', description: 'Echo input text for quick debugging or prompt chaining.' }
-  },
-  {
-    label: 'JSON Inspect',
-    description: 'Pretty-print payload as JSON',
-    item: { name: 'json_inspect', binding: 'builtin', description: 'Render payload as formatted JSON for inspection.' }
-  },
-  {
-    label: 'List Keys',
-    description: 'List top-level keys from an object payload',
-    item: { name: 'list_keys', binding: 'builtin', description: 'Return the top-level keys of a dict-like payload.' }
-  },
-  {
-    label: 'HTTP API',
-    description: 'Call an external API service',
-    item: {
-      name: 'http_api',
-      binding: 'api',
-      description: 'method=POST; url=https://example.com/endpoint; body={\"query\":\"{query}\"}; response=json'
-    }
-  }
 ];
 const knowledgePresets = [
   {
@@ -162,10 +121,6 @@ function closeDetail() {
 
 function selectSection(sectionId) {
   detailSection.value = sectionId;
-}
-
-function createToolItem() {
-  return { name: '', binding: '', description: '' };
 }
 
 function createKnowledgeItem() {
@@ -601,13 +556,10 @@ const modalDescription = computed(() => {
                 <div class="helper-text">
                   Skill-level tools are shared into every compiled agent node. The backend currently runtime-binds <code>builtin</code> tools and generic <code>api</code> tools; <code>mcp</code> entries are still declarations until an MCP endpoint/config layer is added.
                 </div>
-                <ObjectListEditor
+                <ToolListEditor
                   :value="manifest.tools || []"
-                  :fields="toolFields"
-                  :create-item="createToolItem"
-                  help="Declare which tools this skill depends on. Name is the tool id, binding describes the source, and description explains when it is used. For api tools, put config like method/url/body in the description."
-                  :presets="toolPresets"
-                  preset-title="Quick Add Tools"
+                  title="Shared Tools"
+                  help="Shared tools are added to every compiled agent node. builtin tools are ready to use. api tools are configured with structured HTTP fields below. mcp is still export metadata only."
                   @update:value="updateManifest('tools', $event)"
                 />
               </section>
@@ -765,13 +717,10 @@ const modalDescription = computed(() => {
                 </div>
 
                 <div class="subsection-title">Tools</div>
-                <ObjectListEditor
+                <ToolListEditor
                   :value="selectedNode.config.tools || []"
-                  :fields="toolFields"
-                  :create-item="createToolItem"
-                  help="Node-level tools only apply to this node. builtin and api bindings are runtime-wired by the backend."
-                  :presets="toolPresets"
-                  preset-title="Quick Add Tools"
+                  title="Node Tools"
+                  help="Node-level tools only apply to this node. Use builtin for local backend tools, or api for external HTTP endpoints."
                   @update:value="updateNodeConfig('tools', $event)"
                 />
                 <div class="field-help">

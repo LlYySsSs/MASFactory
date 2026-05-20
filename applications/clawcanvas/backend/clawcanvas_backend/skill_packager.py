@@ -12,6 +12,7 @@ from .schema import CanvasDocument
 
 
 ExportFormat = Literal["json", "markdown", "zip"]
+RuntimeConfig = dict[str, Any]
 
 
 def build_skill_package(
@@ -40,6 +41,7 @@ def export_skill_package(
     export_root: str | Path,
     run_output: dict[str, Any] | None = None,
     warnings: list[str] | None = None,
+    runtime: RuntimeConfig | None = None,
     format: ExportFormat = "json",
 ) -> dict[str, Any]:
     package = build_skill_package(document, run_output=run_output, warnings=warnings)
@@ -47,11 +49,11 @@ def export_skill_package(
     export_dir.mkdir(parents=True, exist_ok=True)
 
     if format == "markdown":
-        return _export_as_markdown(document, package, export_dir)
+        return _export_as_markdown(document, package, export_dir, runtime=runtime)
     elif format == "zip":
-        return _export_as_zip(document, package, export_dir)
+        return _export_as_zip(document, package, export_dir, runtime=runtime)
     else:
-        return _export_as_json(package, export_dir)
+        return _export_as_json(package, export_dir, runtime=runtime)
 
 
 def _package_dir_name(skill_name: str) -> str:
@@ -60,8 +62,8 @@ def _package_dir_name(skill_name: str) -> str:
     return f"{safe}_{timestamp}"
 
 
-def _export_as_json(package: dict[str, Any], export_dir: Path) -> dict[str, Any]:
-    paths = _write_publishable_skill_files(package, export_dir)
+def _export_as_json(package: dict[str, Any], export_dir: Path, *, runtime: RuntimeConfig | None = None) -> dict[str, Any]:
+    paths = _write_publishable_skill_files(package, export_dir, runtime=runtime)
 
     return {
         "export_dir": str(export_dir),
@@ -71,8 +73,14 @@ def _export_as_json(package: dict[str, Any], export_dir: Path) -> dict[str, Any]
     }
 
 
-def _export_as_markdown(document: CanvasDocument, package: dict[str, Any], export_dir: Path) -> dict[str, Any]:
-    paths = _write_publishable_skill_files(package, export_dir)
+def _export_as_markdown(
+    document: CanvasDocument,
+    package: dict[str, Any],
+    export_dir: Path,
+    *,
+    runtime: RuntimeConfig | None = None,
+) -> dict[str, Any]:
+    paths = _write_publishable_skill_files(package, export_dir, runtime=runtime)
 
     return {
         "export_dir": str(export_dir),
@@ -82,8 +90,14 @@ def _export_as_markdown(document: CanvasDocument, package: dict[str, Any], expor
     }
 
 
-def _export_as_zip(document: CanvasDocument, package: dict[str, Any], export_dir: Path) -> dict[str, Any]:
-    paths = _write_publishable_skill_files(package, export_dir)
+def _export_as_zip(
+    document: CanvasDocument,
+    package: dict[str, Any],
+    export_dir: Path,
+    *,
+    runtime: RuntimeConfig | None = None,
+) -> dict[str, Any]:
+    paths = _write_publishable_skill_files(package, export_dir, runtime=runtime)
 
     # Create ZIP file
     zip_path = export_dir.parent / f"{export_dir.name}.zip"
@@ -100,7 +114,12 @@ def _export_as_zip(document: CanvasDocument, package: dict[str, Any], export_dir
     }
 
 
-def _write_publishable_skill_files(package: dict[str, Any], export_dir: Path) -> dict[str, Path]:
+def _write_publishable_skill_files(
+    package: dict[str, Any],
+    export_dir: Path,
+    *,
+    runtime: RuntimeConfig | None = None,
+) -> dict[str, Path]:
     document = package["workflow"]
     manifest = package["manifest"]
     paths = {
@@ -113,7 +132,7 @@ def _write_publishable_skill_files(package: dict[str, Any], export_dir: Path) ->
         "ignore_path": export_dir / ".clawhubignore",
     }
 
-    paths["skill_md_path"].write_text(_build_skill_md(package), encoding="utf-8")
+    paths["skill_md_path"].write_text(_build_skill_md(package, runtime=runtime), encoding="utf-8")
     paths["manifest_path"].write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     paths["workflow_path"].write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
     paths["package_path"].write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -123,11 +142,9 @@ def _write_publishable_skill_files(package: dict[str, Any], export_dir: Path) ->
     return paths
 
 
-def _build_skill_md(package: dict[str, Any]) -> str:
+def _build_skill_md(package: dict[str, Any], *, runtime: RuntimeConfig | None = None) -> str:
     manifest = package["manifest"]
     workflow = package["workflow"]
-    nodes = workflow.get("nodes") or []
-    edges = workflow.get("edges") or []
     requirements = _derive_openclaw_requirements(workflow, manifest)
     display_name = _normalize_skill_name(manifest.get("name") or workflow.get("name") or "clawcanvas_skill")
     skill_slug = _official_skill_slug(manifest.get("name") or workflow.get("name") or display_name)
@@ -150,108 +167,11 @@ def _build_skill_md(package: dict[str, Any]) -> str:
             "metadata": metadata,
         }
     )
-
-    tools = manifest.get("tools") or []
-    knowledge = manifest.get("knowledge") or []
-    behavior = manifest.get("behavior") or {}
-    inputs = workflow.get("inputs") or {}
-    attributes = workflow.get("attributes") or {}
-    key_descriptions = workflow.get("key_descriptions") or {}
-
+    body = _build_skill_md_body_with_llm(package, runtime=runtime)
+    if not body:
+        body = _build_skill_md_body_fallback(package)
     return f"""{frontmatter}
-# {display_name}
-
-{description}
-
-## When To Use
-
-Use this skill when the user needs the workflow described by this package. The workflow was designed in ClawCanvas and modeled for MASFactory execution.
-
-## How This Skill Runs
-
-This skill includes the exact workflow graph and runtime metadata, but a compatible MASFactory runner must be present in the execution environment. If the environment cannot execute MASFactory graphs directly, use the attached files and `RUN_WORKFLOW.md` to reconstruct and run the workflow exactly.
-
-## Reconstruction Contract
-
-- Reconstruct the workflow exactly from the serialized data in this file.
-- Prefer the attached files `workflow.canvas.json` and `skill.manifest.json` when the runtime can read bundled files.
-- If bundled files are unavailable, use the embedded JSON blocks in this markdown as the source of truth.
-- Do not compress, summarize, or reinterpret node logic when rebuilding. Preserve node ids, edge ids, key mappings, prompts, tools, loop controller mappings, and termination rules exactly.
-
-## Runtime Requirements
-
-{_format_requirements_markdown(requirements)}
-
-## Installation Notes
-
-- Install Python 3.10 or newer.
-- Install MASFactory in the execution environment.
-- Install any additional Python packages required by declared API tools, memories, or retrievers.
-- Provide the required environment variables before running workflows that call external models or services.
-
-## Tools
-
-{_format_tools_markdown(tools)}
-
-## Domain Knowledge
-
-{_format_knowledge_markdown(knowledge)}
-
-## Behavior Rules
-
-{_format_behavior_markdown(behavior)}
-
-## Workflow Summary
-
-- Nodes: {len(nodes)}
-- Edges: {len(edges)}
-- Engine: MASFactory
-- Source application: ClawCanvas
-
-## Workflow Identity
-
-- Document id: `{workflow.get("id") or ""}`
-- Workflow name: `{workflow.get("name") or ""}`
-- Description: {workflow.get("description") or "No description provided."}
-
-## Workflow Inputs
-
-{_json_block(inputs)}
-
-## Workflow Attributes
-
-{_json_block(attributes)}
-
-## Workflow Key Descriptions
-
-{_json_block(key_descriptions)}
-
-## Workflow Topology
-
-{_format_edge_list(edges)}
-
-## Node Specifications
-
-{_format_node_sections(nodes)}
-
-## Workflow Files
-
-- `workflow.canvas.json`: full ClawCanvas workflow graph.
-- `skill.manifest.json`: structured skill metadata.
-- `skill.package.json`: complete exported package including last run metadata.
-- `RUN_WORKFLOW.md`: execution guide for MASFactory environments.
-
-## Agent Instructions
-
-When using this skill, inspect `workflow.canvas.json` first. Rebuild or execute the graph exactly as specified, including node ids, edge ids, key mappings, prompt templates, custom Python logic, tool bindings, loop controller mappings, and termination rules. Follow the behavior rules and domain knowledge above. If required credentials are missing, request the declared environment variables before execution.
-
-## Exact Skill Manifest JSON
-
-{_json_block(manifest)}
-
-## Exact Workflow Canvas JSON
-
-{_json_block(workflow)}
+{body}
 
 ---
 
@@ -340,6 +260,262 @@ If `masfactory` is not available from your configured package index, install it 
 
 OpenClaw skills are instruction bundles. They can include supporting files, but OpenClaw does not automatically know how to execute a custom MASFactory graph unless a compatible runner is installed. This skill therefore includes both human/agent instructions and the exact workflow JSON needed by a runner.
 """
+
+
+def _build_skill_md_body_with_llm(package: dict[str, Any], *, runtime: RuntimeConfig | None = None) -> str | None:
+    runtime = runtime or {}
+    api_key = str(runtime.get("apiKey") or "").strip()
+    if not api_key:
+        return None
+
+    model_name = str(runtime.get("modelName") or "gpt-4o-mini").strip() or "gpt-4o-mini"
+    base_url = str(runtime.get("baseUrl") or "").strip() or None
+    digest = _build_skill_generation_digest(package)
+
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return None
+
+    client_kwargs: dict[str, Any] = {}
+    if base_url:
+        client_kwargs["base_url"] = base_url
+
+    client = OpenAI(api_key=api_key, **client_kwargs)
+    response = client.responses.create(
+        model=model_name,
+        input=[
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": (
+                            "You are writing the markdown body of an OpenClaw/ClawHub skill. "
+                            "Do not output YAML frontmatter. "
+                            "Start with a level-1 markdown title. "
+                            "Preserve workflow details accurately. "
+                            "Do not invent nodes, tools, constraints, loop rules, or runtime requirements. "
+                            "Use clear sections such as When To Use, Inputs, Outputs, Workflow Overview, "
+                            "Node Details, Tools, Behavior, Validation Summary, Run Notes, Supporting Files. "
+                            "Mention supporting files when helpful, but do not claim exact reconstruction "
+                            "unless the structured data says so. "
+                            "If there are warnings, include them in a Warnings or Validation Notes section."
+                        ),
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": (
+                            "Write the skill markdown body for the following workflow package. "
+                            "Use the structured digest below as the source of truth.\n\n"
+                            + json.dumps(digest, ensure_ascii=False, indent=2)
+                        ),
+                    }
+                ],
+            },
+        ],
+    )
+    body = _extract_response_text(response).strip()
+    if not body:
+        return None
+    return body
+
+
+def _build_skill_md_body_fallback(package: dict[str, Any]) -> str:
+    manifest = package["manifest"]
+    workflow = package["workflow"]
+    nodes = workflow.get("nodes") or []
+    edges = workflow.get("edges") or []
+    tools = manifest.get("tools") or []
+    knowledge = manifest.get("knowledge") or []
+    behavior = manifest.get("behavior") or {}
+    inputs = workflow.get("inputs") or {}
+    attributes = workflow.get("attributes") or {}
+    key_descriptions = workflow.get("key_descriptions") or {}
+    requirements = _derive_openclaw_requirements(workflow, manifest)
+    display_name = _normalize_skill_name(manifest.get("name") or workflow.get("name") or "clawcanvas_skill")
+    description = manifest.get("description") or workflow.get("description") or "ClawCanvas exported skill."
+
+    return f"""# {display_name}
+
+{description}
+
+## When To Use
+
+Use this skill when the user needs the workflow described by this package. The workflow was designed in ClawCanvas and modeled for MASFactory execution.
+
+## How This Skill Runs
+
+This skill includes the exact workflow graph and runtime metadata, but a compatible MASFactory runner must be present in the execution environment. If the environment cannot execute MASFactory graphs directly, use the attached files and `RUN_WORKFLOW.md` to reconstruct and run the workflow exactly.
+
+## Runtime Requirements
+
+{_format_requirements_markdown(requirements)}
+
+## Tools
+
+{_format_tools_markdown(tools)}
+
+## Domain Knowledge
+
+{_format_knowledge_markdown(knowledge)}
+
+## Behavior Rules
+
+{_format_behavior_markdown(behavior)}
+
+## Workflow Summary
+
+- Nodes: {len(nodes)}
+- Edges: {len(edges)}
+- Engine: MASFactory
+- Source application: ClawCanvas
+
+## Workflow Identity
+
+- Document id: `{workflow.get("id") or ""}`
+- Workflow name: `{workflow.get("name") or ""}`
+- Description: {workflow.get("description") or "No description provided."}
+
+## Workflow Inputs
+
+{_json_block(inputs)}
+
+## Workflow Attributes
+
+{_json_block(attributes)}
+
+## Workflow Key Descriptions
+
+{_json_block(key_descriptions)}
+
+## Workflow Topology
+
+{_format_edge_list(edges)}
+
+## Node Specifications
+
+{_format_node_sections(nodes)}
+
+## Workflow Files
+
+- `workflow.canvas.json`: full ClawCanvas workflow graph.
+- `skill.manifest.json`: structured skill metadata.
+- `skill.package.json`: complete exported package including last run metadata.
+- `RUN_WORKFLOW.md`: execution guide for MASFactory environments.
+
+## Agent Instructions
+
+When using this skill, inspect `workflow.canvas.json` first. Rebuild or execute the graph exactly as specified, including node ids, edge ids, key mappings, prompt templates, custom Python logic, tool bindings, loop controller mappings, and termination rules. Follow the behavior rules and domain knowledge above. If required credentials are missing, request the declared environment variables before execution.
+
+## Exact Skill Manifest JSON
+
+{_json_block(manifest)}
+
+## Exact Workflow Canvas JSON
+
+{_json_block(workflow)}
+"""
+
+
+def _build_skill_generation_digest(package: dict[str, Any]) -> dict[str, Any]:
+    manifest = package["manifest"]
+    workflow = package["workflow"]
+    runtime = package.get("runtime") or {}
+    last_run = package.get("last_run") or {}
+    nodes = workflow.get("nodes") or []
+    edges = workflow.get("edges") or []
+    return {
+        "skill": {
+            "name": manifest.get("name") or workflow.get("name") or "clawcanvas_skill",
+            "description": manifest.get("description") or workflow.get("description") or "",
+            "version": manifest.get("version") or "0.1.0",
+            "tags": manifest.get("tags") or [],
+            "tools": manifest.get("tools") or [],
+            "knowledge": manifest.get("knowledge") or [],
+            "behavior": manifest.get("behavior") or {},
+        },
+        "workflow": {
+            "id": workflow.get("id") or "",
+            "name": workflow.get("name") or "",
+            "description": workflow.get("description") or "",
+            "inputs": workflow.get("inputs") or {},
+            "attributes": workflow.get("attributes") or {},
+            "key_descriptions": workflow.get("key_descriptions") or {},
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "edges": edges,
+            "nodes": [_summarize_node_for_llm(node) for node in nodes],
+        },
+        "runtime": runtime,
+        "last_run": last_run,
+        "requirements": _derive_openclaw_requirements(workflow, manifest),
+        "supporting_files": [
+            "SKILL.md",
+            "workflow.canvas.json",
+            "skill.manifest.json",
+            "skill.package.json",
+            "RUN_WORKFLOW.md",
+            ".clawhubignore",
+        ],
+    }
+
+
+def _summarize_node_for_llm(node: dict[str, Any]) -> dict[str, Any]:
+    config = dict(node.get("config") or {})
+    summary = {
+        "id": node.get("id") or "",
+        "type": node.get("type") or "",
+        "label": node.get("label") or "",
+        "position": node.get("position") or {},
+        "instructions": config.get("instructions") or "",
+        "prompt_template": config.get("prompt_template") or "",
+        "pull_keys": config.get("pull_keys") or {},
+        "push_keys": config.get("push_keys") or {},
+        "tools": config.get("tools") or [],
+        "knowledge": config.get("knowledge") or [],
+        "behavior_rules": config.get("behavior_rules") or [],
+    }
+    if node.get("type") == "custom":
+        summary["custom"] = {
+            "mode": config.get("mode") or "",
+            "templates": config.get("templates") or {},
+            "static_outputs": config.get("static_outputs") or {},
+            "pick_keys": config.get("pick_keys") or {},
+            "python_code": config.get("python_code") or "",
+        }
+    if node.get("type") == "loop":
+        summary["loop"] = {
+            "max_iterations": config.get("max_iterations") or 0,
+            "terminate_when": config.get("terminate_when") or {},
+            "controller": config.get("controller") or {},
+            "controller_inputs": config.get("controller_inputs") or [],
+            "controller_outputs": config.get("controller_outputs") or [],
+            "subgraph": config.get("subgraph") or {},
+        }
+    return summary
+
+
+def _extract_response_text(response: Any) -> str:
+    output = getattr(response, "output_text", None)
+    if isinstance(output, str) and output.strip():
+        return output
+    for item in getattr(response, "output", []) or []:
+        if getattr(item, "type", None) != "message":
+            continue
+        parts = []
+        for block in getattr(item, "content", []) or []:
+            text = getattr(block, "text", None)
+            if text:
+                parts.append(str(text))
+        if parts:
+            return "\n".join(parts)
+    return ""
 
 
 def _derive_openclaw_requirements(workflow: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:

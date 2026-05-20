@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import MapEditor from './MapEditor.vue';
 import ObjectListEditor from './ObjectListEditor.vue';
 import StringListEditor from './StringListEditor.vue';
+import ToolListEditor from './ToolListEditor.vue';
 
 const props = defineProps({
   selectedNode: { type: Object, default: null },
@@ -11,21 +12,6 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['update-node', 'delete-node', 'open-loop']);
-
-const toolFields = [
-  { key: 'name', label: 'Name', placeholder: 'echo / json_inspect / http_api' },
-  {
-    key: 'binding',
-    label: 'Binding',
-    options: [
-      { value: 'mcp', label: 'mcp' },
-      { value: 'builtin', label: 'builtin' },
-      { value: 'api', label: 'api' },
-      { value: 'other', label: 'other' }
-    ]
-  },
-  { key: 'description', label: 'Description', placeholder: 'What this tool does', multiline: true }
-];
 
 const knowledgeFields = [
   { key: 'title', label: 'Title', placeholder: 'Refund policy' },
@@ -38,12 +24,6 @@ const nodeBehaviorRuleSuggestions = [
   'List assumptions briefly.',
   'Return structured output.'
 ];
-const toolPresets = [
-  { label: 'Echo', description: 'Return text unchanged', item: { name: 'echo', binding: 'builtin', description: 'Echo input text for quick debugging or prompt chaining.' } },
-  { label: 'JSON Inspect', description: 'Pretty-print payload as JSON', item: { name: 'json_inspect', binding: 'builtin', description: 'Render payload as formatted JSON for inspection.' } },
-  { label: 'List Keys', description: 'List top-level keys', item: { name: 'list_keys', binding: 'builtin', description: 'Return the top-level keys of a dict-like payload.' } },
-  { label: 'HTTP API', description: 'Call external API', item: { name: 'http_api', binding: 'api', description: 'method=POST; url=https://example.com/endpoint; body={\"query\":\"{query}\"}; response=json' } }
-];
 const knowledgePresets = [
   { label: 'Policy', description: 'Business policy', item: { title: 'Policy', text: 'Describe the rule.' } },
   { label: 'Reference', description: 'Reference note', item: { title: 'Reference', text: 'Add a factual note.' } }
@@ -55,10 +35,6 @@ const customModeOptions = [
   { value: 'pick', label: 'Pick Inputs' },
   { value: 'compose', label: 'Compose Mixed Output' }
 ];
-
-function createToolItem() {
-  return { name: '', binding: '', description: '' };
-}
 
 function createKnowledgeItem() {
   return { title: '', text: '' };
@@ -261,12 +237,10 @@ const customStaticWarnings = computed(() =>
         />
 
         <div class="subsection-title">Tools</div>
-        <ObjectListEditor
+        <ToolListEditor
           :value="selectedNode.config.tools || []"
-          :fields="toolFields"
-          :create-item="createToolItem"
-          :presets="toolPresets"
-          preset-title="Quick Add Tools"
+          title="Inner Node Tools"
+          help="These tools only apply to this inner loop node."
           @update:value="updateNodeConfig('tools', $event)"
         />
       </template>

@@ -36,6 +36,28 @@ def build_model(*, api_key: str, model_name: str, base_url: str | None = None):
     )
 
 
+def document_requires_model(document: CanvasDocument) -> bool:
+    return any(_node_requires_model(node) for node in document.nodes)
+
+
+def _node_requires_model(node: CanvasNode) -> bool:
+    if node.type == "agent":
+        return True
+    if node.type != "loop":
+        return False
+
+    config = dict(node.config)
+    controller_config = dict(config.get("controller") or {})
+    termination_mode = str(controller_config.get("termination_mode") or "key_rule").strip()
+    terminate_prompt = str(controller_config.get("terminate_condition_prompt") or "").strip()
+    if termination_mode == "prompt" and terminate_prompt:
+        return True
+
+    subgraph = dict(config.get("subgraph") or {})
+    inner_nodes = [_dict_to_canvas_node(item) for item in (subgraph.get("nodes") or [])]
+    return any(_node_requires_model(inner_node) for inner_node in inner_nodes)
+
+
 def compile_document_to_graph(
     document: CanvasDocument,
     *,
@@ -45,7 +67,7 @@ def compile_document_to_graph(
 ):
     from masfactory.components.graphs.root_graph import RootGraph
 
-    model = build_model(api_key=api_key, model_name=model_name, base_url=base_url)
+    model = build_model(api_key=api_key, model_name=model_name, base_url=base_url) if document_requires_model(document) else None
     warnings = CompileWarnings()
     runtime_warnings = RuntimeWarnings(warnings.add)
     shared_agent_context = _shared_agent_context(document)
@@ -94,6 +116,8 @@ def _create_runtime_node(
     runtime_warnings: RuntimeWarnings,
 ):
     if node.type == "agent":
+        if model is None:
+            raise ValueError(f"agent node '{node.id}' requires runtime.apiKey and a valid model runtime")
         return _create_agent_node(
             graph,
             node,

@@ -44,6 +44,7 @@ BUILTIN_TOOL_REGISTRY: dict[str, Callable[..., Any]] = {
     "list_keys": builtin_list_keys,
     "concat_text": builtin_concat_text,
 }
+SUPPORTED_BUILTIN_TOOL_NAMES = tuple(sorted(BUILTIN_TOOL_REGISTRY.keys()))
 
 SUPPORTED_BUILTIN_MEMORIES = {"history_memory", "vector_memory"}
 SUPPORTED_BUILTIN_RETRIEVERS = {"keyword_retriever", "vector_retriever", "filesystem_retriever"}
@@ -99,6 +100,7 @@ def _resolve_tool_declaration(
     name = str(declaration.get("name") or "").strip()
     binding = str(declaration.get("binding") or "builtin").strip().lower()
     description = str(declaration.get("description") or "").strip()
+    config = dict(declaration.get("config") or {})
     if not name:
         warnings.add(f"{owner}: encountered a tool declaration with empty name; skipped")
         return None
@@ -117,7 +119,7 @@ def _resolve_tool_declaration(
         )
         return None
     if binding == "api":
-        tool = _build_api_tool(name, description, owner=owner, warnings=warnings)
+        tool = _build_api_tool(name, description, config=config, owner=owner, warnings=warnings)
         if tool is None:
             return None
         return tool
@@ -390,6 +392,7 @@ def _build_api_tool(
     name: str,
     description: str,
     *,
+    config: dict[str, Any] | None = None,
     owner: str,
     warnings: RuntimeWarnings,
 ) -> Callable[..., Any] | None:
@@ -399,21 +402,23 @@ def _build_api_tool(
         warnings.add(f"{owner}: tool '{name}' uses binding 'api' but Python package 'requests' is not installed")
         return None
 
-    method = (_extract_setting(description, "method") or "POST").strip().upper()
-    url = (_extract_setting(description, "url") or "").strip()
-    timeout = _extract_float(description, "timeout", default=20.0)
+    config = dict(config or {})
+    method = str(config.get("method") or _extract_setting(description, "method") or "POST").strip().upper()
+    url = str(config.get("url") or _extract_setting(description, "url") or "").strip()
+    timeout_raw = config.get("timeout")
+    timeout = float(timeout_raw) if timeout_raw not in (None, "") else _extract_float(description, "timeout", default=20.0)
     if not url:
         warnings.add(f"{owner}: api tool '{name}' requires url=<endpoint> in description")
         return None
 
-    raw_headers = _extract_setting(description, "headers")
-    raw_static_params = _extract_setting(description, "params")
-    raw_static_body = _extract_setting(description, "body")
-    response_mode = (_extract_setting(description, "response") or "json").strip().lower()
+    raw_headers = config.get("headers")
+    raw_static_params = config.get("params")
+    raw_static_body = config.get("body")
+    response_mode = str(config.get("response") or _extract_setting(description, "response") or "json").strip().lower()
 
-    static_headers = _parse_json_mapping(raw_headers, owner=owner, label=f"api tool '{name}' headers", warnings=warnings)
-    static_params = _parse_json_mapping(raw_static_params, owner=owner, label=f"api tool '{name}' params", warnings=warnings)
-    static_body = _parse_json_value(raw_static_body, owner=owner, label=f"api tool '{name}' body", warnings=warnings)
+    static_headers = _parse_json_mapping_value(raw_headers, owner=owner, label=f"api tool '{name}' headers", warnings=warnings)
+    static_params = _parse_json_mapping_value(raw_static_params, owner=owner, label=f"api tool '{name}' params", warnings=warnings)
+    static_body = _parse_json_value_any(raw_static_body, owner=owner, label=f"api tool '{name}' body", warnings=warnings)
 
     def api_tool(**arguments):
         request_url = _render_api_template(url, arguments)
@@ -448,27 +453,29 @@ def _build_api_tool(
         }
 
     api_tool.__name__ = f"api_{_safe_callable_name(name)}"
-    api_tool.__doc__ = (
-        f"HTTP API tool '{name}'. "
-        "Configure description as semicolon-separated key=value entries, for example: "
-        "method=POST; url=https://example.com/endpoint; headers={\"Authorization\":\"Bearer {token}\"}; "
-        "body={\"query\":\"{query}\"}; response=json"
-    )
+    api_tool.__doc__ = f"HTTP API tool '{name}'."
     return api_tool
 
 
-def _parse_json_mapping(raw: str | None, *, owner: str, label: str, warnings: RuntimeWarnings) -> dict[str, str]:
-    if raw is None or not raw.strip():
+def _parse_json_mapping_value(raw: Any, *, owner: str, label: str, warnings: RuntimeWarnings) -> dict[str, str]:
+    if raw is None:
         return {}
-    parsed = _parse_json_value(raw, owner=owner, label=label, warnings=warnings)
+    if isinstance(raw, dict):
+        return {str(key): str(value) for key, value in raw.items()}
+    parsed = _parse_json_value_any(raw, owner=owner, label=label, warnings=warnings)
     if isinstance(parsed, dict):
         return {str(key): str(value) for key, value in parsed.items()}
     warnings.add(f"{owner}: {label} must be a JSON object")
     return {}
 
 
-def _parse_json_value(raw: str | None, *, owner: str, label: str, warnings: RuntimeWarnings) -> Any:
-    if raw is None or not raw.strip():
+def _parse_json_value_any(raw: Any, *, owner: str, label: str, warnings: RuntimeWarnings) -> Any:
+    if raw is None:
+        return None
+    if isinstance(raw, (dict, list, int, float, bool)):
+        return raw
+    raw = str(raw).strip()
+    if not raw:
         return None
     try:
         return json.loads(raw)

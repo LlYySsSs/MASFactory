@@ -16,7 +16,7 @@ try:
 except ImportError:  # pragma: no cover
     CORS = None  # type: ignore[assignment]
 
-from .compiler import compile_document_to_graph
+from .compiler import compile_document_to_graph, document_requires_model
 from .key_pool import collect_document_key_pool, rename_document_key
 from .schema import build_demo_document, parse_document
 from .skill_packager import export_skill_package
@@ -133,7 +133,7 @@ def create_app() -> "Flask":
         document = parse_document(payload.get("document") or payload)
         runtime = payload.get("runtime") or {}
         api_key = str(runtime.get("apiKey") or "").strip()
-        if not api_key:
+        if document_requires_model(document) and not api_key:
             return jsonify({"ok": False, "error": "runtime.apiKey is required"}), 400
 
         model_name = str(runtime.get("modelName") or "gpt-4o-mini")
@@ -164,6 +164,7 @@ def create_app() -> "Flask":
         document = parse_document(payload.get("document") or payload)
         run_output = dict(payload.get("runOutput") or {})
         warnings = list(payload.get("warnings") or [])
+        runtime = dict(payload.get("runtime") or {})
         export_format = str(payload.get("format") or "json").lower()
 
         if export_format not in {"json", "markdown", "zip"}:
@@ -175,6 +176,7 @@ def create_app() -> "Flask":
             export_root=export_root,
             run_output=run_output,
             warnings=warnings,
+            runtime=runtime,
             format=export_format,
         )
         return jsonify({"ok": True, **result})
